@@ -1,4 +1,3 @@
-"""Agent VM Observability package."""
+"""coding-agents-mem package."""
 
 VERSION = "0.1.0"
-

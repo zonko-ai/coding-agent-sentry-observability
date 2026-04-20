@@ -1,6 +1,6 @@
-# Agent VM Observability
+# coding-agents-mem
 
-Agent VM Observability packages the local Sentry bridge and central memory store for agent usage on this machine. It watches Claude Code and Codex local telemetry, exports normalized traces to Sentry, and keeps a shared SQLite memory database that can import the existing `claude-mem` database without mutating it.
+`coding-agents-mem` packages the local Sentry bridge and central memory store for agent usage on this machine. It watches Claude Code and Codex local telemetry, exports normalized traces to Sentry, and keeps a shared SQLite memory database that can import the existing `claude-mem` database without mutating it.
 
 ## What It Tracks
 
@@ -20,6 +20,8 @@ pip install -e ".[dev]"
 ```
 
 Existing Sentry DSN config remains compatible at `~/.config/agent-sentry/env`. New config is read from `~/.config/agent-vm-observability/env` as an override. Do not commit either file.
+
+The repository name is `coding-agents-mem`. Internal module names, CLI commands, and runtime state paths remain `agent-vm*` for compatibility with the existing service and stored data.
 
 ## CLI
 

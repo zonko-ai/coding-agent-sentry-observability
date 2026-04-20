@@ -40,7 +40,7 @@ class SentrySink:
         sentry_sdk.init(
             dsn=self.config.sentry_dsn,
             environment=os.environ.get("SENTRY_ENVIRONMENT", "local-vm"),
-            release=f"agent-vm-observability@{VERSION}",
+            release=f"coding-agents-mem@{VERSION}",
             traces_sample_rate=self.config.traces_sample_rate,
             send_default_pii=False,
             before_send=lambda event, hint: scrub(event),

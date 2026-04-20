@@ -3,7 +3,7 @@ requires = ["hatchling>=1.26"]
 build-backend = "hatchling.build"
 
 [project]
-name = "agent-vm-observability"
+name = "coding-agents-mem"
 version = "0.1.0"
 description = "Local observability and shared memory for Codex and Claude Code usage on one VM."
 readme = "README.md"
@@ -24,3 +24,5 @@ agent-vm = "agent_vm_observability.cli:main"
 testpaths = ["tests"]
 pythonpath = ["src"]
 
+[tool.hatch.build.targets.wheel]
+packages = ["src/agent_vm_observability"]

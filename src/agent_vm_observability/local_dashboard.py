@@ -28,7 +28,7 @@ def run_dashboard(memory_db: Path, host: str, port: int) -> None:
             return
 
     server = ThreadingHTTPServer((host, port), Handler)
-    print(f"Agent VM dashboard: http://{host}:{port}", flush=True)
+    print(f"coding-agents-mem dashboard: http://{host}:{port}", flush=True)
     server.serve_forever()
 
 
@@ -79,7 +79,7 @@ def render_dashboard(store: MemoryStore) -> str:
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Agent VM Observability</title>
+  <title>coding-agents-mem</title>
   <style>
     body {{ margin: 0; font: 14px/1.4 -apple-system, BlinkMacSystemFont, sans-serif; background: #f7f7f5; color: #161616; }}
     header {{ padding: 28px 32px; background: #151a1f; color: white; }}
@@ -94,7 +94,7 @@ def render_dashboard(store: MemoryStore) -> str:
 </head>
 <body>
   <header>
-    <h1>Agent VM Observability</h1>
+    <h1>coding-agents-mem</h1>
     <p>Local traces and shared memory across Codex and Claude Code.</p>
   </header>
   <main>
@@ -108,4 +108,3 @@ def render_dashboard(store: MemoryStore) -> str:
   </main>
 </body>
 </html>"""
-
