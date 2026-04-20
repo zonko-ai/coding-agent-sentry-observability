@@ -15,45 +15,79 @@ def dashboard_specs() -> list[dict[str, Any]]:
         {
             "title": "Agent VM Usage Overview",
             "widgets": [
-                _big_number("Events by agent", "count()", ["agent:codex OR agent:claude-code"]),
-                _table("Recent trace types", ["title", "event.type", "count()"], "", "discover"),
-                _table("Transactions by name", ["transaction", "count()"], "event.type:transaction", "transactions"),
-                _table("Claude traces", ["title", "event.type", "count()"], "title:claude*", "discover"),
-                _table("Codex traces", ["title", "event.type", "count()"], "title:codex*", "discover"),
-                _table("Tool traces", ["title", "count()"], "tool_name:* OR title:*tool*", "discover"),
+                _big_number("Events by agent", "count()", ["is_transaction:true agent:codex", "is_transaction:true agent:claude-code"], "transaction-like"),
+                _table("Recent traces", ["transaction", "count()"], "is_transaction:true", "transaction-like"),
+                _table("Claude traces", ["transaction", "count()"], "is_transaction:true transaction:claude*", "transaction-like"),
+                _table("Codex traces", ["transaction", "count()"], "is_transaction:true transaction:codex*", "transaction-like"),
+                _table("Tool traces", ["transaction", "count()"], "is_transaction:true tool_name:* OR transaction:*tool*", "transaction-like"),
+                _table("Error-level events", ["title", "count()"], "level:error agent:codex OR agent:claude-code", "error-events"),
             ],
         },
         {
             "title": "Agent VM Tool And Token Health",
             "widgets": [
-                _table("Slow traces", ["title", "transaction.duration", "timestamp"], "event.type:transaction", "transactions"),
-                _table("Claude assistant turns", ["title", "count()"], "title:claude.assistant_turn", "discover"),
-                _table("Claude tools", ["title", "count()"], "title:claude.tool_*", "discover"),
-                _table("Codex websocket activity", ["title", "count()"], "title:codex.codex.websocket*", "discover"),
-                _table("Error-level agent events", ["title", "level", "count()"], "level:error", "discover"),
+                _table("Slow traces", ["transaction.duration", "transaction", "timestamp"], "is_transaction:true", "transaction-like"),
+                _table("Claude assistant turns", ["transaction", "count()"], "is_transaction:true transaction:claude.assistant_turn", "transaction-like"),
+                _table("Claude tools", ["transaction", "count()"], "is_transaction:true transaction:claude.tool_*", "transaction-like"),
+                _table("Codex websocket activity", ["transaction", "count()"], "is_transaction:true transaction:codex.codex.websocket*", "transaction-like"),
+                _table("Error-level agent events", ["title", "level", "count()"], "level:error agent:codex OR agent:claude-code", "error-events"),
             ],
         },
     ]
 
 
 def _table(title: str, fields: list[str], query: str, dataset: str) -> dict[str, Any]:
+    query_fields = _query_fields(fields)
     return {
         "title": title,
         "displayType": "table",
         "interval": "5m",
-        "queries": [{"name": title, "fields": fields, "query": query, "orderby": "-count()", "aggregates": fields, "columns": fields}],
-        "widgetType": dataset,
+        "queries": [
+            {
+                "name": title,
+                "fields": query_fields["fields"],
+                "query": query,
+                "orderby": _default_orderby(query_fields),
+                "aggregates": query_fields["aggregates"],
+                "columns": query_fields["columns"],
+            }
+        ],
+        "widgetType": _widget_type(dataset),
     }
 
 
-def _big_number(title: str, field: str, queries: list[str]) -> dict[str, Any]:
+def _big_number(title: str, field: str, queries: list[str], dataset: str) -> dict[str, Any]:
     return {
         "title": title,
         "displayType": "big_number",
         "interval": "5m",
         "queries": [{"name": q or title, "fields": [field], "query": q, "aggregates": [field], "columns": []} for q in queries],
-        "widgetType": "discover",
+        "widgetType": _widget_type(dataset),
     }
+
+
+def _query_fields(fields: list[str]) -> dict[str, list[str]]:
+    aggregates = [field for field in fields if "(" in field and field.endswith(")")]
+    columns = [field for field in fields if field not in aggregates]
+    return {"fields": [*aggregates, *columns], "aggregates": aggregates, "columns": columns}
+
+
+def _default_orderby(query_fields: dict[str, list[str]]) -> str:
+    if query_fields["aggregates"]:
+        return f"-{query_fields['aggregates'][0]}"
+    if "transaction.duration" in query_fields["columns"]:
+        return "-transaction.duration"
+    return query_fields["columns"][0] if query_fields["columns"] else "-timestamp"
+
+
+def _widget_type(dataset: str) -> str:
+    if dataset == "spans":
+        return "spans"
+    if dataset in {"transaction-like", "error-events"}:
+        return "spans" if dataset == "transaction-like" else "error-events"
+    if dataset == "transactions":
+        return "spans"
+    return "error-events"
 
 
 @dataclass
@@ -86,16 +120,17 @@ class SentryDashboardClient:
         widgets = []
         for widget in spec["widgets"]:
             widget = json.loads(json.dumps(widget))
-            if project_id:
-                for query in widget.get("queries", []):
-                    query["conditions"] = query.pop("query", "")
-                    query["fields"] = query.get("fields", [])
-                    query["aggregates"] = query.get("aggregates", [])
-                    query["columns"] = query.get("columns", [])
-                    query["fieldAliases"] = []
-                widget["projects"] = [int(project_id)]
+            for query in widget.get("queries", []):
+                query["conditions"] = query.pop("query", "")
+                query["fields"] = query.get("fields", [])
+                query["aggregates"] = query.get("aggregates", [])
+                query["columns"] = query.get("columns", [])
+                query["fieldAliases"] = [""] * len(query["fields"])
             widgets.append(widget)
-        return {"title": spec["title"], "widgets": widgets}
+        payload: dict[str, Any] = {"title": spec["title"], "widgets": widgets}
+        if project_id:
+            payload["projects"] = [int(project_id)]
+        return payload
 
     def _post_dashboard(self, title: str, payload: dict[str, Any]) -> DashboardApplyResult:
         url = f"{self.base_url}/api/0/organizations/{self.config.sentry_org}/dashboards/"
@@ -114,4 +149,3 @@ class SentryDashboardClient:
             if exc.code == 409 or "already exists" in body.lower():
                 return DashboardApplyResult(title, "already-exists", body)
             return DashboardApplyResult(title, f"failed:{exc.code}", body)
-
