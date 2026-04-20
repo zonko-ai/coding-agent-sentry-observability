@@ -1,0 +1,26 @@
+[build-system]
+requires = ["hatchling>=1.26"]
+build-backend = "hatchling.build"
+
+[project]
+name = "agent-vm-observability"
+version = "0.1.0"
+description = "Local observability and shared memory for Codex and Claude Code usage on one VM."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "sentry-sdk>=2.58.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+]
+
+[project.scripts]
+agent-vm = "agent_vm_observability.cli:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
