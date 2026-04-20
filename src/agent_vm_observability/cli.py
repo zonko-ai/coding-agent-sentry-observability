@@ -145,8 +145,10 @@ def cmd_status(config: Any) -> int:
     memory = MemoryStore(config.memory_db_path)
     try:
         counts = memory.counts()
+        usage_24h = memory.usage_rollup(hours=24, top_n=5)
     except Exception as exc:
         counts = {"error": str(exc)}
+        usage_24h = {"error": str(exc)}
     status = {
         "version": VERSION,
         "config_path": str(config.config_path),
@@ -161,6 +163,7 @@ def cmd_status(config: Any) -> int:
         "codex_threads_last_updated_ms": state.get("codex_threads_last_updated_ms"),
         "claude_files_tracked": len(state.get("claude_files", {})),
         "memory_counts": counts,
+        "usage_24h": usage_24h,
         "launchd": launchd_status().splitlines()[:8],
     }
     print(json.dumps(status, indent=2, sort_keys=True))

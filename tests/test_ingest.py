@@ -23,7 +23,10 @@ def test_codex_log_to_trace_normalizes_fields(tmp_path: Path) -> None:
         process_uuid text, estimated_bytes integer)
         """
     )
-    body = f'event.name="codex.websocket_event" model="gpt-5.4" cwd="{tmp_path}" success=true duration_ms=9'
+    body = (
+        f'event.name="codex.websocket_event" model="gpt-5.4" cwd="{tmp_path}" success=true duration_ms=9 '
+        'input_token_count=110 cached_token_count=100 output_token_count=5 reasoning_token_count=2 tool_token_count=115'
+    )
     conn.execute(
         "insert into logs values (1, 1776683000, 0, 'INFO', 'codex_otel.log_only', ?, 'm', 'f', 1, 'thread-1', 'p', 120)",
         (body,),
@@ -37,6 +40,11 @@ def test_codex_log_to_trace_normalizes_fields(tmp_path: Path) -> None:
     assert trace.model == "gpt-5.4"
     assert trace.duration_ms == 9
     assert trace.measurements["estimated_bytes"] == 120
+    assert trace.token_usage["input_tokens"] == 10
+    assert trace.token_usage["cache_read_input_tokens"] == 100
+    assert trace.token_usage["output_tokens"] == 5
+    assert trace.measurements["cost_usd"] == 0.000125
+    assert trace.measurements["total_tokens"] == 115
 
 
 def test_claude_record_to_traces_extracts_assistant_and_tool() -> None:
@@ -51,7 +59,12 @@ def test_claude_record_to_traces_extracts_assistant_and_tool() -> None:
             "role": "assistant",
             "model": "claude-opus-4-7",
             "stop_reason": "tool_use",
-            "usage": {"input_tokens": 3, "output_tokens": 4},
+            "usage": {
+                "input_tokens": 3,
+                "output_tokens": 4,
+                "cache_creation_input_tokens": 6,
+                "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 6},
+            },
             "content": [{"type": "tool_use", "id": "tool-1", "name": "Read", "input": {"file_path": "x"}}],
         },
     }
@@ -60,4 +73,6 @@ def test_claude_record_to_traces_extracts_assistant_and_tool() -> None:
     assert traces[0].agent == "claude-code"
     assert traces[0].project == "example"
     assert traces[0].token_usage["input_tokens"] == 3
+    assert traces[0].token_usage["cache_creation_1h_input_tokens"] == 6
+    assert traces[0].measurements["cost_usd"] == 0.000175
     assert traces[1].tool_name == "Read"

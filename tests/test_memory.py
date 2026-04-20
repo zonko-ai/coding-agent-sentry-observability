@@ -1,7 +1,9 @@
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 
 from agent_vm_observability.memory import MemoryStore
+from agent_vm_observability.model import NormalizedTrace
 
 
 def create_claude_mem_fixture(path: Path) -> None:
@@ -103,3 +105,42 @@ def test_import_claude_mem_and_search(tmp_path: Path) -> None:
     context = store.context("/Users/example/3_zonko_projects/example", "codex")
     assert "Dashboard decision" in context
 
+
+def test_usage_rollup_dedupes_claude_assistant_message_ids(tmp_path: Path) -> None:
+    store = MemoryStore(tmp_path / "memory.db")
+    now = datetime.now(timezone.utc)
+    for source_id in ("claude-a", "claude-b"):
+        store.record_trace(
+            NormalizedTrace(
+                agent="claude-code",
+                kind="assistant_turn",
+                timestamp=now,
+                source_event_id=source_id,
+                session_id="session-1",
+                model="claude-opus-4-7",
+                project="example",
+                token_usage={"input_tokens": 10, "output_tokens": 5},
+                measurements={"cost_usd": 0.001},
+                extra={"message_id": "message-1"},
+            )
+        )
+
+    store.record_trace(
+        NormalizedTrace(
+            agent="codex",
+            kind="codex.sse_event",
+            timestamp=now,
+            source_event_id="codex-1",
+            session_id="session-2",
+            model="gpt-5.4",
+            project="example",
+            token_usage={"input_tokens": 20, "output_tokens": 4},
+            measurements={"cost_usd": 0.002},
+        )
+    )
+
+    rollup = store.usage_rollup(hours=24, top_n=5)
+    assert rollup["totals"]["usage_events"] == 2
+    assert rollup["totals"]["input_tokens"] == 30
+    assert rollup["totals"]["output_tokens"] == 9
+    assert rollup["totals"]["cost_usd"] == 0.003

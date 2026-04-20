@@ -85,11 +85,15 @@ class SentrySink:
             event["timestamp"] = ts
         self._sentry_sdk.capture_event(event)
 
-        transaction = self._sentry_sdk.start_transaction(name=trace.title, op=f"agent.{trace.agent}.{trace.kind}")
+        transaction = self._sentry_sdk.start_transaction(name=trace.title, op=_transaction_op(trace))
         for key, value in tags.items():
             transaction.set_tag(key, value)
         for key, value in measurements.items():
-            transaction.set_data(f"measurement.{key}", value)
+            if hasattr(transaction, "set_measurement"):
+                transaction.set_measurement(_measurement_name(key), float(value))
+        for key, value in _gen_ai_attributes(trace, measurements).items():
+            transaction.set_data(key, value)
+        transaction.set_data("agent_measurements", measurements)
         transaction.set_data("event_timestamp", ts)
         transaction.set_data("source_event_id", trace.stable_event_id())
         transaction.finish()
@@ -101,3 +105,53 @@ class SentrySink:
     def flush(self, timeout: int = 30) -> None:
         if self.enabled and self._sentry_sdk is not None:
             self._sentry_sdk.flush(timeout=timeout)
+
+
+def _measurement_name(key: str) -> str:
+    return key.replace(".", "_").replace("-", "_")
+
+
+def _transaction_op(trace: NormalizedTrace) -> str:
+    if trace.tool_name:
+        return "gen_ai.execute_tool"
+    measurements = trace.all_measurements()
+    if trace.model and any(key in measurements for key in ("input_tokens", "output_tokens", "total_tokens")):
+        return "gen_ai.invoke_agent"
+    return f"agent.{trace.agent}.{trace.kind}"
+
+
+def _gen_ai_attributes(trace: NormalizedTrace, measurements: dict[str, int | float]) -> dict[str, Any]:
+    data: dict[str, Any] = {"gen_ai.agent.name": trace.agent}
+    if trace.provider:
+        data["gen_ai.system"] = trace.provider
+    if trace.model:
+        data["gen_ai.request.model"] = trace.model
+    if trace.tool_name:
+        data["gen_ai.tool.name"] = trace.tool_name
+        data["gen_ai.operation.name"] = "execute_tool"
+    else:
+        data["gen_ai.operation.name"] = trace.kind
+
+    input_tokens_total = int(
+        measurements.get("input_tokens_total")
+        or (
+            float(measurements.get("input_tokens") or 0)
+            + float(measurements.get("cache_read_input_tokens") or 0)
+            + float(measurements.get("cache_creation_input_tokens") or 0)
+        )
+    )
+    if input_tokens_total:
+        data["gen_ai.usage.input_tokens"] = input_tokens_total
+    cached_input_tokens = int(measurements.get("cache_read_input_tokens") or 0)
+    if cached_input_tokens:
+        data["gen_ai.usage.input_tokens.cached"] = cached_input_tokens
+    output_tokens = int(measurements.get("output_tokens") or 0)
+    if output_tokens:
+        data["gen_ai.usage.output_tokens"] = output_tokens
+    reasoning_tokens = int(measurements.get("reasoning_tokens") or 0)
+    if reasoning_tokens:
+        data["gen_ai.usage.output_tokens.reasoning"] = reasoning_tokens
+    total_tokens = int(measurements.get("total_tokens") or 0)
+    if total_tokens:
+        data["gen_ai.usage.total_tokens"] = total_tokens
+    return data

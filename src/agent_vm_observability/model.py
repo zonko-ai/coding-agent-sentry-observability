@@ -156,11 +156,35 @@ class NormalizedTrace:
             "vm_host": socket.gethostname(),
         }
         base.update(self.tags)
-        return {
+        alias_keys = {
+            "agent": "agent",
+            "kind": "kind",
+            "session_id": "session_id",
+            "turn_id": "turn_id",
+            "project": "agent_project",
+            "cwd": "agent_cwd",
+            "repo": "agent_repo",
+            "git_branch": "git_branch",
+            "git_sha": "git_sha",
+            "model": "agent_model",
+            "provider": "provider",
+            "agent_version": "agent_version",
+            "tool_name": "tool_name",
+            "tool_kind": "tool_kind",
+            "command_kind": "command_kind",
+            "success": "success",
+            "vm_host": "vm_host",
+        }
+        tags = {
             f"{self.sentry_source}.{key}": safe_tag_value(value)
             for key, value in base.items()
             if value not in (None, "")
         }
+        for key, alias in alias_keys.items():
+            value = base.get(key)
+            if value not in (None, ""):
+                tags[alias] = safe_tag_value(value)
+        return tags
 
     def sentry_extra(self) -> dict[str, Any]:
         return scrub(
@@ -197,4 +221,3 @@ def normalize_level(level: str | None) -> str:
     if normalized in {"trace", "verbose"}:
         return "debug"
     return "info"
-

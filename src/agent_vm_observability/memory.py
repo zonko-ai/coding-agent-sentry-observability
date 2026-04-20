@@ -207,6 +207,25 @@ class ImportResult:
     memories: int = 0
 
 
+USAGE_SUM_KEYS = (
+    "input_tokens",
+    "input_tokens_total",
+    "output_tokens",
+    "total_tokens",
+    "cache_read_input_tokens",
+    "cache_creation_input_tokens",
+    "cache_creation_5m_input_tokens",
+    "cache_creation_1h_input_tokens",
+    "reasoning_tokens",
+    "tool_tokens",
+    "cost_usd",
+    "input_cost_usd",
+    "output_cost_usd",
+    "cache_read_cost_usd",
+    "cache_write_cost_usd",
+)
+
+
 class MemoryStore:
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -265,6 +284,7 @@ class MemoryStore:
                     turn_db_id = self._upsert_turn(conn, session_db_id, trace)
                 event_id = self._upsert_event(conn, agent_id, session_db_id, turn_db_id, trace)
                 if trace.tool_name and event_id:
+                    conn.execute("delete from tool_calls where event_id = ?", (event_id,))
                     conn.execute(
                         """
                         insert into tool_calls(event_id, agent_id, session_db_id, tool_name, tool_kind, success, duration_ms, metadata_json, created_at_epoch)
@@ -356,12 +376,29 @@ class MemoryStore:
         content_hash = short_hash(json.dumps({"tags": trace.tags, "extra": trace.extra}, sort_keys=True, default=str))
         conn.execute(
             """
-            insert or ignore into events(
+            insert into events(
               agent_id, session_db_id, turn_db_id, source_event_id, kind, title, level, timestamp, timestamp_epoch,
               cwd, project, model, tool_name, success, duration_ms, measurements_json, tags_json, extra_json,
               content_hash, created_at_epoch
             )
             values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            on conflict(agent_id, source_event_id, kind) do update set
+              session_db_id=coalesce(excluded.session_db_id, events.session_db_id),
+              turn_db_id=coalesce(excluded.turn_db_id, events.turn_db_id),
+              title=excluded.title,
+              level=excluded.level,
+              timestamp=excluded.timestamp,
+              timestamp_epoch=excluded.timestamp_epoch,
+              cwd=coalesce(excluded.cwd, events.cwd),
+              project=coalesce(excluded.project, events.project),
+              model=coalesce(excluded.model, events.model),
+              tool_name=coalesce(excluded.tool_name, events.tool_name),
+              success=coalesce(excluded.success, events.success),
+              duration_ms=coalesce(excluded.duration_ms, events.duration_ms),
+              measurements_json=excluded.measurements_json,
+              tags_json=excluded.tags_json,
+              extra_json=excluded.extra_json,
+              content_hash=excluded.content_hash
             """,
             (
                 agent_id,
@@ -744,6 +781,177 @@ class MemoryStore:
             lines.append(f"- {row['timestamp']}: {row['title']} {detail}".rstrip())
         return "\n".join(lines)
 
+    def usage_rollup(self, hours: int = 24, top_n: int = 8) -> dict[str, Any]:
+        self.initialize()
+        cutoff_epoch = max(int(time.time()) - hours * 3600, 0)
+        with closing(self.connect()) as conn:
+            rows = conn.execute(
+                """
+                select e.id, e.kind, e.title, e.level, e.timestamp, e.timestamp_epoch, e.project, e.model, e.tool_name,
+                       e.success, e.source_event_id, e.measurements_json, e.extra_json, a.name as agent,
+                       s.external_session_id, s.cwd
+                from events e
+                join agents a on a.id = e.agent_id
+                left join agent_sessions s on s.id = e.session_db_id
+                where coalesce(e.timestamp_epoch, 0) >= ?
+                order by e.timestamp_epoch desc, e.id desc
+                """,
+                (cutoff_epoch,),
+            ).fetchall()
+            tool_call_count = int(
+                conn.execute(
+                    """
+                    select count(*) as n
+                    from tool_calls tc
+                    join events e on e.id = tc.event_id
+                    where coalesce(e.timestamp_epoch, 0) >= ?
+                    """,
+                    (cutoff_epoch,),
+                ).fetchone()["n"]
+            )
+            import_status = conn.execute(
+                """
+                select count(*) as imported_items, max(created_at) as latest_created_at
+                from memories
+                where source = 'claude-mem'
+                """
+            ).fetchone()
+
+        totals = _usage_bucket()
+        by_agent: dict[str, dict[str, Any]] = {}
+        by_model: dict[str, dict[str, Any]] = {}
+        by_project: dict[str, dict[str, Any]] = {}
+        by_session: dict[str, dict[str, Any]] = {}
+        seen_usage: set[str] = set()
+        active_sessions: set[str] = set()
+        recent_failures: list[dict[str, Any]] = []
+        pricing_notes: set[str] = set()
+
+        for row in rows:
+            session_key = row["external_session_id"] or row["source_event_id"]
+            if session_key:
+                active_sessions.add(str(session_key))
+            extra = _json_object(row["extra_json"])
+            measurements = _usage_measurements(_json_object(row["measurements_json"]))
+            is_failure = (row["level"] or "").lower() == "error" or row["success"] == 0
+            if is_failure and len(recent_failures) < 12:
+                recent_failures.append(
+                    {
+                        "timestamp": row["timestamp"],
+                        "agent": row["agent"],
+                        "project": row["project"],
+                        "title": row["title"],
+                        "model": row["model"],
+                        "tool_name": row["tool_name"],
+                    }
+                )
+            pricing_note = str(((extra.get("cost_estimate") or {}).get("pricing_note") or "")).strip()
+            if pricing_note:
+                pricing_notes.add(pricing_note)
+
+            if row["kind"] == "thread_update" or not any(measurements.get(key) for key in USAGE_SUM_KEYS):
+                continue
+
+            usage_key = _usage_identity(row["agent"], row["kind"], row["source_event_id"], extra)
+            if usage_key in seen_usage:
+                continue
+            seen_usage.add(usage_key)
+
+            _apply_usage(totals, measurements, session_key=session_key, failed=is_failure)
+
+            agent_bucket = by_agent.setdefault(row["agent"], _usage_bucket(name=row["agent"]))
+            _apply_usage(agent_bucket, measurements, session_key=session_key, failed=is_failure)
+
+            model_name = row["model"] or "unknown"
+            model_bucket = by_model.setdefault(model_name, _usage_bucket(name=model_name, agent=row["agent"]))
+            _apply_usage(model_bucket, measurements, session_key=session_key, failed=is_failure)
+
+            project_name = row["project"] or "unknown"
+            project_bucket = by_project.setdefault(project_name, _usage_bucket(name=project_name))
+            _apply_usage(project_bucket, measurements, session_key=session_key, failed=is_failure)
+
+            session_bucket = by_session.setdefault(
+                str(session_key),
+                _usage_bucket(
+                    session_id=str(session_key),
+                    agent=row["agent"],
+                    project=row["project"],
+                    model=row["model"],
+                    cwd=row["cwd"],
+                    last_timestamp=row["timestamp"],
+                ),
+            )
+            session_bucket.setdefault("last_timestamp", row["timestamp"])
+            _apply_usage(session_bucket, measurements, session_key=session_key, failed=is_failure)
+
+        return {
+            "window_hours": hours,
+            "health": {
+                "total_events": len(rows),
+                "usage_events": len(seen_usage),
+                "tool_calls": tool_call_count,
+                "active_sessions": len(active_sessions),
+                "error_events": sum(1 for row in rows if (row["level"] or "").lower() == "error" or row["success"] == 0),
+                "error_rate": round(
+                    (sum(1 for row in rows if (row["level"] or "").lower() == "error" or row["success"] == 0) / len(rows)),
+                    4,
+                )
+                if rows
+                else 0.0,
+            },
+            "totals": _finalize_usage_bucket(totals),
+            "by_agent": _finalize_usage_list(by_agent, top_n),
+            "by_model": _finalize_usage_list(by_model, top_n),
+            "by_project": _finalize_usage_list(by_project, top_n),
+            "recent_sessions": _finalize_recent_sessions(by_session, top_n),
+            "recent_failures": recent_failures,
+            "pricing_notes": sorted(pricing_notes),
+            "import_status": {
+                "claude_mem_sources": int(import_status["imported_items"] or 0) if import_status else 0,
+                "latest_created_at": import_status["latest_created_at"] if import_status else None,
+            },
+        }
+
+    def dashboard_snapshot(self, hours: int = 24, limit: int = 12) -> dict[str, Any]:
+        self.initialize()
+        usage = self.usage_rollup(hours=hours, top_n=max(limit, 8))
+        with closing(self.connect()) as conn:
+            recent_events = conn.execute(
+                """
+                select e.title, a.name as agent, e.project, e.model, e.tool_name, e.timestamp, e.level, e.measurements_json
+                from events e join agents a on a.id=e.agent_id
+                order by e.timestamp_epoch desc, e.id desc
+                limit ?
+                """,
+                (limit,),
+            ).fetchall()
+            recent_memories = conn.execute(
+                """
+                select project, type, title, created_at, agent
+                from memories
+                order by created_at_epoch desc, id desc
+                limit ?
+                """,
+                (limit,),
+            ).fetchall()
+        return {
+            "counts": self.counts(),
+            "usage": usage,
+            "recent_events": [
+                {
+                    "timestamp": row["timestamp"],
+                    "agent": row["agent"],
+                    "project": row["project"],
+                    "title": row["title"],
+                    "detail": row["tool_name"] or row["model"],
+                    "level": row["level"],
+                    "measurements": _usage_measurements(_json_object(row["measurements_json"])),
+                }
+                for row in recent_events
+            ],
+            "recent_memories": [dict(row) for row in recent_memories],
+        }
+
     def counts(self) -> dict[str, int]:
         self.initialize()
         with closing(self.connect()) as conn:
@@ -768,3 +976,85 @@ def _join_text(row: sqlite3.Row, keys: Iterable[str]) -> str:
         if value:
             parts.append(str(value))
     return "\n\n".join(parts)
+
+
+def _json_object(value: str | None) -> dict[str, Any]:
+    if not value:
+        return {}
+    try:
+        payload = json.loads(value)
+    except json.JSONDecodeError:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _usage_measurements(measurements: dict[str, Any]) -> dict[str, float]:
+    values: dict[str, float] = {}
+    for key in USAGE_SUM_KEYS:
+        raw = measurements.get(key)
+        if isinstance(raw, (int, float)):
+            values[key] = float(raw)
+    if not values.get("cache_creation_input_tokens"):
+        values["cache_creation_input_tokens"] = values.get("cache_creation_5m_input_tokens", 0.0) + values.get(
+            "cache_creation_1h_input_tokens", 0.0
+        )
+    if not values.get("input_tokens_total"):
+        values["input_tokens_total"] = (
+            values.get("input_tokens", 0.0)
+            + values.get("cache_read_input_tokens", 0.0)
+            + values.get("cache_creation_input_tokens", 0.0)
+        )
+    if not values.get("total_tokens"):
+        values["total_tokens"] = values.get("input_tokens_total", 0.0) + values.get("output_tokens", 0.0)
+    return values
+
+
+def _usage_bucket(**extra: Any) -> dict[str, Any]:
+    bucket: dict[str, Any] = {key: 0.0 for key in USAGE_SUM_KEYS}
+    bucket.update({"usage_events": 0, "error_events": 0, "_sessions": set()})
+    bucket.update(extra)
+    return bucket
+
+
+def _apply_usage(bucket: dict[str, Any], measurements: dict[str, float], *, session_key: str | None, failed: bool) -> None:
+    for key in USAGE_SUM_KEYS:
+        bucket[key] += float(measurements.get(key) or 0)
+    bucket["usage_events"] += 1
+    if failed:
+        bucket["error_events"] += 1
+    if session_key:
+        bucket["_sessions"].add(str(session_key))
+
+
+def _finalize_usage_bucket(bucket: dict[str, Any]) -> dict[str, Any]:
+    result = {key: value for key, value in bucket.items() if key != "_sessions"}
+    result["sessions"] = len(bucket.get("_sessions", set()))
+    for key in USAGE_SUM_KEYS:
+        value = float(result.get(key) or 0)
+        if key.endswith("_usd"):
+            result[key] = round(value, 6)
+        else:
+            result[key] = int(round(value))
+    usage_events = int(result.get("usage_events") or 0)
+    result["error_rate"] = round((int(result.get("error_events") or 0) / usage_events), 4) if usage_events else 0.0
+    return result
+
+
+def _finalize_usage_list(items: dict[str, dict[str, Any]], top_n: int) -> list[dict[str, Any]]:
+    finalized = [_finalize_usage_bucket(item) for item in items.values()]
+    finalized.sort(key=lambda item: (float(item.get("cost_usd") or 0), int(item.get("total_tokens") or 0)), reverse=True)
+    return finalized[:top_n]
+
+
+def _finalize_recent_sessions(items: dict[str, dict[str, Any]], top_n: int) -> list[dict[str, Any]]:
+    finalized = [_finalize_usage_bucket(item) for item in items.values()]
+    finalized.sort(key=lambda item: str(item.get("last_timestamp") or ""), reverse=True)
+    return finalized[:top_n]
+
+
+def _usage_identity(agent: str, kind: str, source_event_id: str, extra: dict[str, Any]) -> str:
+    if agent == "claude-code" and kind == "assistant_turn":
+        message_id = extra.get("message_id")
+        if message_id:
+            return f"claude-message:{message_id}"
+    return f"{agent}:{kind}:{source_event_id}"

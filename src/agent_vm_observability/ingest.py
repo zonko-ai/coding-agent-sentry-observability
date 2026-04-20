@@ -15,6 +15,7 @@ from typing import Any
 from .config import RuntimeConfig, env_int
 from .memory import MemoryStore
 from .model import GitMetadataCache, NormalizedTrace, infer_project
+from .pricing import apply_cost_estimate
 from .redaction import redact_text, scrub, short_hash
 from .sentry_sink import SentrySink
 from .state import empty_state
@@ -64,6 +65,15 @@ def flatten_usage(usage: dict[str, Any] | None) -> dict[str, int | float]:
         for key, value in server_tool_use.items():
             if isinstance(value, (int, float)):
                 measurements[f"server_tool_use.{key}"] = value
+    cache_creation = usage.get("cache_creation")
+    if isinstance(cache_creation, dict):
+        for source_key, target_key in (
+            ("ephemeral_5m_input_tokens", "cache_creation_5m_input_tokens"),
+            ("ephemeral_1h_input_tokens", "cache_creation_1h_input_tokens"),
+        ):
+            value = cache_creation.get(source_key)
+            if isinstance(value, (int, float)):
+                measurements[target_key] = value
     return measurements
 
 
@@ -307,10 +317,26 @@ def codex_log_to_trace(row: sqlite3.Row, git: GitMetadataCache) -> NormalizedTra
             pass
     if row["estimated_bytes"]:
         measurements["estimated_bytes"] = int(row["estimated_bytes"])
+    token_usage: dict[str, int | float] = {}
+    raw_input_tokens = _int_or_none(parsed.get("input_token_count"))
+    cached_input_tokens = _int_or_none(parsed.get("cached_token_count")) or 0
+    if raw_input_tokens is not None:
+        token_usage["input_tokens_total"] = raw_input_tokens
+        token_usage["input_tokens"] = max(raw_input_tokens - cached_input_tokens, 0)
+    if cached_input_tokens:
+        token_usage["cache_read_input_tokens"] = cached_input_tokens
+    for source_key, target_key in (
+        ("output_token_count", "output_tokens"),
+        ("reasoning_token_count", "reasoning_tokens"),
+        ("tool_token_count", "tool_tokens"),
+    ):
+        value = _int_or_none(parsed.get(source_key))
+        if value is not None:
+            token_usage[target_key] = value
     success = _bool(parsed.get("success"))
     session_id = row["thread_id"] or parsed.get("thread.id") or parsed.get("conversation.id")
     turn_id = parsed.get("turn.id") or parsed.get("submission.id")
-    return NormalizedTrace(
+    trace = NormalizedTrace(
         agent="codex",
         kind=f"codex.{kind}" if not kind.startswith("codex.") else kind,
         timestamp=timestamp,
@@ -329,6 +355,7 @@ def codex_log_to_trace(row: sqlite3.Row, git: GitMetadataCache) -> NormalizedTra
         agent_version=parsed.get("app.version"),
         duration_ms=measurements.pop("duration_ms", None),
         success=success,
+        token_usage=token_usage,
         measurements=measurements,
         tags={
             "level": row["level"],
@@ -338,6 +365,8 @@ def codex_log_to_trace(row: sqlite3.Row, git: GitMetadataCache) -> NormalizedTra
             "wire_api": parsed.get("wire_api"),
             "api_path": parsed.get("api.path"),
             "app_version": parsed.get("app.version"),
+            "auth_mode": parsed.get("auth_mode"),
+            "event_kind": parsed.get("event.kind"),
         },
         extra={
             "log_id": row["id"],
@@ -349,6 +378,8 @@ def codex_log_to_trace(row: sqlite3.Row, git: GitMetadataCache) -> NormalizedTra
             "body": redact_text(body),
         },
     )
+    apply_cost_estimate(trace)
+    return trace
 
 
 def codex_thread_to_trace(row: sqlite3.Row, git: GitMetadataCache, include_text: bool) -> NormalizedTrace:
@@ -366,7 +397,7 @@ def codex_thread_to_trace(row: sqlite3.Row, git: GitMetadataCache, include_text:
     }
     if include_text:
         extra["first_user_message"] = redact_text(first_user_message)
-    return NormalizedTrace(
+    trace = NormalizedTrace(
         agent="codex",
         kind="thread_update",
         timestamp=parse_timestamp((row["updated_at_ms"] or 0) / 1000),
@@ -384,6 +415,8 @@ def codex_thread_to_trace(row: sqlite3.Row, git: GitMetadataCache, include_text:
         tags={"source": row["source"], "reasoning_effort": row["reasoning_effort"]},
         extra=extra,
     )
+    apply_cost_estimate(trace)
+    return trace
 
 
 def claude_record_to_traces(record: dict[str, Any], git: GitMetadataCache, include_text: bool) -> list[NormalizedTrace]:
@@ -422,6 +455,10 @@ def claude_record_to_traces(record: dict[str, Any], git: GitMetadataCache, inclu
         "agent_version": record.get("version"),
     }
     traces: list[NormalizedTrace] = []
+    def append_trace(trace: NormalizedTrace) -> None:
+        apply_cost_estimate(trace)
+        traces.append(trace)
+
     if isinstance(message, dict):
         content = message.get("content")
         summary = content_summary(content, include_text)
@@ -433,7 +470,7 @@ def claude_record_to_traces(record: dict[str, Any], git: GitMetadataCache, inclu
         tags = {**base_tags, "role": role, "stop_reason": stop_reason, "request_id": record.get("requestId")}
         extra = {**base_extra, "message_id": message.get("id"), "content_summary": summary, "usage": scrub(usage) if include_text else usage}
         if record_type == "assistant":
-            traces.append(
+            append_trace(
                 NormalizedTrace(
                     **base,
                     kind="assistant_turn",
@@ -445,7 +482,7 @@ def claude_record_to_traces(record: dict[str, Any], git: GitMetadataCache, inclu
                 )
             )
             for tool in summary.get("tool_uses", []):
-                traces.append(
+                append_trace(
                     NormalizedTrace(
                         **base,
                         kind="tool_use",
@@ -458,7 +495,7 @@ def claude_record_to_traces(record: dict[str, Any], git: GitMetadataCache, inclu
                     )
                 )
         elif record_type == "user" and record.get("toolUseResult"):
-            traces.append(
+            append_trace(
                 NormalizedTrace(
                     **base,
                     kind="tool_result",
@@ -471,7 +508,7 @@ def claude_record_to_traces(record: dict[str, Any], git: GitMetadataCache, inclu
                 )
             )
         elif record_type == "user":
-            traces.append(
+            append_trace(
                 NormalizedTrace(
                     **base,
                     kind="user_prompt",
@@ -483,7 +520,7 @@ def claude_record_to_traces(record: dict[str, Any], git: GitMetadataCache, inclu
                 )
             )
         else:
-            traces.append(
+            append_trace(
                 NormalizedTrace(
                     **base,
                     kind=record_type,
@@ -495,7 +532,7 @@ def claude_record_to_traces(record: dict[str, Any], git: GitMetadataCache, inclu
                 )
             )
     else:
-        traces.append(
+        append_trace(
             NormalizedTrace(
                 **base,
                 kind=record_type,
@@ -523,6 +560,15 @@ def _bool(value: Any) -> bool | None:
     if text in {"0", "false", "no", "error", "failed"}:
         return False
     return None
+
+
+def _int_or_none(value: Any) -> int | None:
+    if value in (None, ""):
+        return None
+    try:
+        return int(str(value))
+    except (TypeError, ValueError):
+        return None
 
 
 def run_bridge_loop(
