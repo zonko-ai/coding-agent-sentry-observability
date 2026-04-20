@@ -52,10 +52,7 @@ def infer_provider(provider: str | None, model: str | None) -> str | None:
 
 
 def _builtin_rules() -> list[PricingRule]:
-    anthropic_note = (
-        "Anthropic base input/output rates are current. Cache read and cache write rates use the standard Anthropic family ratios; "
-        "cache creation is priced exactly only when the logs expose 5m vs 1h cache writes."
-    )
+    anthropic_note = "Anthropic standard API pricing, including cache read, 5m cache write, and 1h cache write rates."
     return [
         PricingRule(
             name="gpt-5.4",
@@ -97,7 +94,6 @@ def _builtin_rules() -> list[PricingRule]:
             cache_write_5m_per_mtok_usd=3.75,
             cache_write_1h_per_mtok_usd=6.0,
             source="builtin-anthropic-2026-04-20",
-            inferred=True,
             note=anthropic_note,
         ),
         PricingRule(
@@ -110,7 +106,6 @@ def _builtin_rules() -> list[PricingRule]:
             cache_write_5m_per_mtok_usd=6.25,
             cache_write_1h_per_mtok_usd=10.0,
             source="builtin-anthropic-2026-04-20",
-            inferred=True,
             note=anthropic_note,
         ),
         PricingRule(
@@ -123,7 +118,6 @@ def _builtin_rules() -> list[PricingRule]:
             cache_write_5m_per_mtok_usd=1.25,
             cache_write_1h_per_mtok_usd=2.0,
             source="builtin-anthropic-2026-04-20",
-            inferred=True,
             note=anthropic_note,
         ),
     ]
