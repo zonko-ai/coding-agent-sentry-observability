@@ -3,11 +3,11 @@ from agent_vm_observability.redaction import redact_text, scrub
 
 
 def test_redacts_common_secret_shapes() -> None:
-    text = "OPENAI_API_KEY=sk-1234567890abcdef password=hunter2 user=sahan@example.com"
+    text = "OPENAI_API_KEY: fake-openai-key password=hunter2 user=person@example.com"
     redacted = redact_text(text)
-    assert "sk-1234567890abcdef" not in redacted
+    assert "fake-openai-key" not in redacted
     assert "hunter2" not in redacted
-    assert "sahan@example.com" not in redacted
+    assert "person@example.com" not in redacted
     assert "[redacted" in redacted
 
 
@@ -25,3 +25,17 @@ def test_trace_keeps_claude_sentry_title_compatible() -> None:
     assert tags["claude.agent"] == "claude-code"
     assert tags["claude.session_id"] == "s1"
 
+
+def test_trace_hashes_local_paths_in_sentry_tags() -> None:
+    trace = NormalizedTrace(
+        agent="codex",
+        kind="thread_update",
+        cwd="/Users/alice/private/project",
+        repo="/Users/alice/private/project",
+    )
+
+    tags = trace.sentry_tags()
+
+    assert tags["agent_cwd"].startswith("path:")
+    assert tags["agent_repo"].startswith("path:")
+    assert "/Users/alice" not in str(tags)

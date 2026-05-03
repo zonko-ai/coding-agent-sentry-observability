@@ -5,15 +5,31 @@ build-backend = "hatchling.build"
 [project]
 name = "coding-agents-mem"
 version = "0.1.0"
-description = "Local observability and shared memory for Codex and Claude Code usage on one VM."
+description = "Local observability and shared memory for Codex, Claude Code, and Pi agent usage."
 readme = "README.md"
 requires-python = ">=3.11"
+license = "MIT"
+authors = [{ name = "coding-agents-mem contributors" }]
+keywords = ["agents", "observability", "sentry", "codex", "claude-code", "pi"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+  "Topic :: System :: Monitoring",
+]
 dependencies = [
   "sentry-sdk>=2.58.0",
 ]
 
 [project.optional-dependencies]
 dev = [
+  "build>=1.2",
   "pytest>=8.0",
 ]
 

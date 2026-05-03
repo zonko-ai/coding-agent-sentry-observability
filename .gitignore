@@ -8,10 +8,11 @@ __pycache__/
 .ruff_cache/
 .mypy_cache/
 htmlcov/
+.coverage
+.pi/
 dist/
 build/
 *.db
 *.db-shm
 *.db-wal
 local/
-

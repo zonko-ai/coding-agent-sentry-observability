@@ -2,22 +2,15 @@
   "dashboards": [
     {
       "title": "Agent VM Usage Overview",
-      "purpose": "Top-level health for Codex and Claude Code local traces",
+      "purpose": "Single chart-heavy dashboard for agent runs, LLM calls, duration, tokens, tool usage, coding harness distribution, costs, projects, and failures across Codex, Claude Code, and Pi.",
+      "period": "1h",
       "queries": [
-        "title:codex*",
-        "title:claude*",
-        "event.type:transaction"
-      ]
-    },
-    {
-      "title": "Agent VM Tool And Token Health",
-      "purpose": "Tool, assistant turn, websocket, and error-level trace views",
-      "queries": [
-        "title:*tool*",
-        "title:claude.assistant_turn",
-        "level:error"
+        "is_transaction:true agent_model:*",
+        "is_transaction:true tool_name:*",
+        "is_transaction:true session_id:*",
+        "is_transaction:true (success:false OR level:error)",
+        "agent:codex OR agent:claude-code OR agent:pi"
       ]
     }
   ]
 }
-

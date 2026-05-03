@@ -55,3 +55,9 @@ def safe_tag_value(value: Any) -> str:
     text = redact_text(str(value), max_len=180)
     return text.replace("\n", " ")
 
+
+def safe_path_tag_value(value: Any) -> str:
+    text = str(value)
+    if text.startswith("/Users/") or text.startswith("/home/") or text.startswith("~"):
+        return f"path:{short_hash(text)}"
+    return safe_tag_value(value)

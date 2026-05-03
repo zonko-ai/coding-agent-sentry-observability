@@ -14,92 +14,112 @@ def dashboard_specs() -> list[dict[str, Any]]:
     return [
         {
             "title": "Agent VM Usage Overview",
+            "period": "1h",
             "widgets": [
-                _big_number("Estimated cost (24h)", "sum(measurements.cost_usd)", "is_transaction:true"),
-                _big_number("Total tokens (24h)", "sum(measurements.total_tokens)", "is_transaction:true"),
-                _big_number("Trace volume (24h)", "count()", "is_transaction:true"),
-                _table(
-                    "Top models by cost",
-                    ["sum(measurements.cost_usd)", "sum(measurements.total_tokens)", "count()", "agent_model"],
-                    "is_transaction:true agent_model:*",
-                ),
-                _table(
-                    "Top projects by cost",
-                    ["sum(measurements.cost_usd)", "sum(measurements.total_tokens)", "count()", "agent_project"],
-                    "is_transaction:true agent_project:*",
-                ),
-                _table(
-                    "Top agents by cost",
-                    ["sum(measurements.cost_usd)", "sum(measurements.total_tokens)", "count()", "agent"],
-                    "is_transaction:true agent:*",
-                ),
-            ],
-        },
-        {
-            "title": "Agent VM Token And Tool Health",
-            "widgets": [
-                _table(
-                    "Largest token traces",
-                    ["measurements.total_tokens", "measurements.cost_usd", "transaction.duration", "transaction", "agent_model", "timestamp"],
-                    "is_transaction:true",
-                ),
-                _table(
-                    "Slow traces",
-                    ["transaction.duration", "measurements.total_tokens", "transaction", "agent", "timestamp"],
-                    "is_transaction:true",
-                ),
-                _table(
-                    "Tool activity",
-                    ["count()", "sum(measurements.total_tokens)", "sum(measurements.cost_usd)", "tool_name"],
-                    "is_transaction:true tool_name:*",
-                ),
-                _table(
-                    "Claude usage",
-                    ["count()", "sum(measurements.total_tokens)", "sum(measurements.cost_usd)", "transaction"],
-                    "is_transaction:true agent:claude-code",
-                ),
-                _table(
-                    "Codex usage",
-                    ["count()", "sum(measurements.total_tokens)", "sum(measurements.cost_usd)", "transaction"],
-                    "is_transaction:true agent:codex",
-                ),
-            ],
-        },
-        {
-            "title": "Agent VM Failures And Sessions",
-            "widgets": [
-                _table(
-                    "Recent sessions",
-                    ["timestamp", "session_id", "agent", "agent_project", "agent_model", "measurements.cost_usd"],
+                _big_number("Active Sessions", "count_unique(session_id)", "is_transaction:true session_id:*", layout=_layout(0, 0, 1, 2)),
+                _big_number("LLM Call Count", "count()", "is_transaction:true agent_model:*", layout=_layout(1, 0, 1, 2)),
+                _big_number("Total Tokens", "sum(measurements.total_tokens)", "is_transaction:true", layout=_layout(2, 0, 2, 2)),
+                _big_number("Estimated Cost", "sum(measurements.cost_usd)", "is_transaction:true", layout=_layout(4, 0, 2, 2)),
+                _line(
+                    "Agent Runs",
+                    ["count_unique(session_id)"],
                     "is_transaction:true session_id:*",
+                    layout=_layout(0, 2, 2, 3),
                 ),
-                _table(
-                    "Failure traces",
-                    ["timestamp", "transaction", "agent", "agent_project", "agent_model"],
-                    "is_transaction:true (success:false OR level:error)",
+                _line(
+                    "LLM Calls",
+                    ["count()"],
+                    "is_transaction:true agent_model:*",
+                    layout=_layout(2, 2, 2, 3),
                 ),
-                _table(
-                    "High-cost traces",
-                    ["measurements.cost_usd", "measurements.total_tokens", "transaction", "agent", "timestamp"],
+                _line(
+                    "Duration",
+                    ["avg(transaction.duration)", "p95(transaction.duration)"],
                     "is_transaction:true",
+                    layout=_layout(4, 2, 2, 3),
+                ),
+                _bar(
+                    "LLM Calls by Model",
+                    ["count()", "agent_model"],
+                    "is_transaction:true agent_model:*",
+                    layout=_layout(0, 5, 2, 4),
+                ),
+                _line(
+                    "Tokens Used",
+                    ["sum(measurements.total_tokens)", "agent_model"],
+                    "is_transaction:true agent_model:*",
+                    layout=_layout(2, 5, 2, 4),
+                ),
+                _bar(
+                    "Tool Calls",
+                    ["count()", "tool_name"],
+                    "is_transaction:true tool_name:*",
+                    layout=_layout(4, 5, 2, 4),
+                ),
+                _line(
+                    "Estimated Cost",
+                    ["sum(measurements.cost_usd)", "agent_model"],
+                    "is_transaction:true",
+                    layout=_layout(0, 9, 2, 4),
+                ),
+                _bar(
+                    "Coding Harness Distribution",
+                    ["count()", "agent"],
+                    "is_transaction:true agent:*",
+                    layout=_layout(2, 9, 2, 4),
                 ),
                 _table(
-                    "Error-level events",
-                    ["title", "count()", "level"],
-                    "agent:codex OR agent:claude-code",
+                    "Usage by Project",
+                    ["count()", "sum(measurements.total_tokens)", "sum(measurements.cost_usd)", "agent_project"],
+                    "is_transaction:true agent_project:*",
+                    layout=_layout(4, 9, 2, 4),
+                ),
+                _line(
+                    "Failures",
+                    ["count()"],
+                    "is_transaction:true (success:false OR level:error)",
+                    layout=_layout(0, 13, 2, 3),
+                ),
+                _table(
+                    "High-cost Traces",
+                    ["measurements.cost_usd", "measurements.total_tokens", "transaction.duration", "transaction", "agent", "agent_model", "timestamp"],
+                    "is_transaction:true",
+                    layout=_layout(2, 13, 2, 4),
+                ),
+                _table(
+                    "Recent Failures",
+                    ["timestamp", "transaction", "agent", "agent_project", "agent_model", "level"],
+                    "agent:codex OR agent:claude-code OR agent:pi",
                     dataset="error-events",
+                    layout=_layout(4, 13, 2, 4),
                 ),
             ],
         },
     ]
 
 
-def _table(title: str, fields: list[str], query: str, dataset: str = "spans") -> dict[str, Any]:
+def _layout(x: int, y: int, w: int, h: int) -> dict[str, int]:
+    return {"x": x, "y": y, "w": w, "h": h, "minH": min(h, 2)}
+
+
+def _table(title: str, fields: list[str], query: str, dataset: str = "spans", layout: dict[str, int] | None = None) -> dict[str, Any]:
+    return _widget(title, "table", fields, query, dataset=dataset, layout=layout)
+
+
+def _line(title: str, fields: list[str], query: str, dataset: str = "spans", layout: dict[str, int] | None = None) -> dict[str, Any]:
+    return _widget(title, "line", fields, query, dataset=dataset, layout=layout)
+
+
+def _bar(title: str, fields: list[str], query: str, dataset: str = "spans", layout: dict[str, int] | None = None) -> dict[str, Any]:
+    return _widget(title, "bar", fields, query, dataset=dataset, layout=layout)
+
+
+def _widget(title: str, display_type: str, fields: list[str], query: str, dataset: str = "spans", layout: dict[str, int] | None = None) -> dict[str, Any]:
     query_fields = _query_fields(fields)
-    return {
+    widget: dict[str, Any] = {
         "title": title,
-        "displayType": "table",
-        "interval": "5m",
+        "displayType": display_type,
+        "interval": "1m",
         "queries": [
             {
                 "name": title,
@@ -112,16 +132,24 @@ def _table(title: str, fields: list[str], query: str, dataset: str = "spans") ->
         ],
         "widgetType": _widget_type(dataset),
     }
+    if layout:
+        widget["layout"] = layout
+    if display_type in {"bar", "line", "area"} and query_fields["columns"]:
+        widget["limit"] = 10
+    return widget
 
 
-def _big_number(title: str, field: str, query: str, dataset: str = "spans") -> dict[str, Any]:
-    return {
+def _big_number(title: str, field: str, query: str, dataset: str = "spans", layout: dict[str, int] | None = None) -> dict[str, Any]:
+    widget = {
         "title": title,
         "displayType": "big_number",
-        "interval": "5m",
+        "interval": "1m",
         "queries": [{"name": title, "fields": [field], "query": query, "aggregates": [field], "columns": []}],
         "widgetType": _widget_type(dataset),
     }
+    if layout:
+        widget["layout"] = layout
+    return widget
 
 
 def _query_fields(fields: list[str]) -> dict[str, list[str]]:
@@ -162,6 +190,8 @@ class SentryDashboardClient:
     def apply(self, dry_run: bool = False) -> list[DashboardApplyResult]:
         if not dry_run and not self.token:
             raise RuntimeError("SENTRY_AUTH_TOKEN is required to apply dashboards")
+        if not dry_run and not self.config.sentry_org:
+            raise RuntimeError("SENTRY_ORG is required to apply dashboards")
         existing = self._list_dashboards() if not dry_run else []
         results: list[DashboardApplyResult] = []
         for spec in dashboard_specs():
@@ -187,7 +217,7 @@ class SentryDashboardClient:
                 query["columns"] = query.get("columns", [])
                 query["fieldAliases"] = [""] * len(query["fields"])
             widgets.append(clone)
-        payload: dict[str, Any] = {"title": spec["title"], "widgets": widgets, "period": "24h"}
+        payload: dict[str, Any] = {"title": spec["title"], "widgets": widgets, "period": spec.get("period", "24h")}
         if self.config.sentry_project_id:
             payload["projects"] = [int(self.config.sentry_project_id)]
         return payload

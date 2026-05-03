@@ -15,6 +15,7 @@ CODEX_LOGS_DB = HOME / ".codex/logs_2.sqlite"
 CODEX_STATE_DB = HOME / ".codex/state_5.sqlite"
 CLAUDE_PROJECTS_GLOB = str(HOME / ".claude/projects/**/*.jsonl")
 CLAUDE_MEM_DB = HOME / ".claude-mem/claude-mem.db"
+PI_SUGGESTER_GLOB = str(HOME / ".pi/suggester")
 
 
 def _parse_env_line(line: str) -> tuple[str, str] | None:
@@ -35,6 +36,8 @@ def _parse_env_line(line: str) -> tuple[str, str] | None:
 
 def load_env_files() -> None:
     """Load legacy and package config files without executing shell code."""
+    shell_keys = set(os.environ)
+    loaded: dict[str, str] = {}
     for path in (LEGACY_CONFIG_PATH, CONFIG_PATH):
         if not path.exists():
             continue
@@ -42,7 +45,10 @@ def load_env_files() -> None:
             parsed = _parse_env_line(line)
             if parsed:
                 key, value = parsed
-                os.environ[key] = value
+                loaded[key] = value
+    for key, value in loaded.items():
+        if key not in shell_keys:
+            os.environ[key] = value
 
 
 def env_bool(name: str, default: bool = False) -> bool:
@@ -77,6 +83,7 @@ class RuntimeConfig:
     codex_state_db: Path
     claude_projects_glob: str
     claude_mem_db: Path
+    pi_suggester_glob: str
     sentry_dsn: str | None
     sentry_org: str
     sentry_project: str
@@ -98,8 +105,9 @@ def get_config() -> RuntimeConfig:
         codex_state_db=env_path("AGENT_VM_CODEX_STATE_DB", env_path("AGENT_SENTRY_CODEX_STATE_DB", CODEX_STATE_DB)),
         claude_projects_glob=os.environ.get("AGENT_VM_CLAUDE_GLOB") or os.environ.get("AGENT_SENTRY_CLAUDE_GLOB") or CLAUDE_PROJECTS_GLOB,
         claude_mem_db=env_path("AGENT_VM_CLAUDE_MEM_DB", CLAUDE_MEM_DB),
+        pi_suggester_glob=os.environ.get("AGENT_VM_PI_SUGGESTER_GLOB") or os.environ.get("AGENT_SENTRY_PI_SUGGESTER_GLOB") or PI_SUGGESTER_GLOB,
         sentry_dsn=os.environ.get("SENTRY_DSN") or os.environ.get("AGENT_SENTRY_DSN"),
-        sentry_org=os.environ.get("SENTRY_ORG", "example-org"),
+        sentry_org=os.environ.get("SENTRY_ORG", ""),
         sentry_project=os.environ.get("SENTRY_PROJECT", "agent-vm-usage"),
         sentry_project_id=os.environ.get("SENTRY_PROJECT_ID"),
         include_text=env_bool("AGENT_SENTRY_INCLUDE_TEXT", False),
@@ -108,4 +116,3 @@ def get_config() -> RuntimeConfig:
         poll_seconds=env_int("AGENT_VM_POLL_SECONDS", env_int("AGENT_SENTRY_POLL_SECONDS", 15)),
         record_memory=env_bool("AGENT_VM_RECORD_MEMORY", True),
     )
-

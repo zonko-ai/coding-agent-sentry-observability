@@ -22,6 +22,18 @@ from .state import empty_state
 from .timeutil import parse_timestamp, to_timestamp, utc_now
 
 
+PI_TEXT_KEYS = {
+    "actualUserPrompt",
+    "modelResponsePreview",
+    "payloadPreview",
+    "preview",
+    "reason",
+    "suggestedPrompt",
+    "text",
+    "toolResultPreview",
+}
+
+
 def log(message: str) -> None:
     print(f"{utc_now().isoformat(timespec='seconds')} {message}", flush=True)
 
@@ -183,6 +195,15 @@ class AgentIngestor:
                 continue
             offset = 0 if cutoff_seconds and stat.st_mtime >= cutoff_seconds else stat.st_size
             claude_files[str(path)] = {"offset": offset, "inode": stat.st_ino, "mtime": stat.st_mtime}
+
+        pi_files: dict[str, Any] = state.setdefault("pi_files", {})
+        for path in self.pi_event_log_paths():
+            try:
+                stat = path.stat()
+            except FileNotFoundError:
+                continue
+            offset = 0 if cutoff_seconds and stat.st_mtime >= cutoff_seconds else stat.st_size
+            pi_files[str(path)] = {"offset": offset, "inode": stat.st_ino, "mtime": stat.st_mtime}
         state["initialized_at"] = int(time.time())
         state["initialization_mode"] = f"backfill-since:{backfill_since.isoformat()}" if backfill_since else "current-watermarks"
 
@@ -191,6 +212,7 @@ class AgentIngestor:
             "codex_logs": self.process_codex_logs(state, max_batch),
             "codex_threads": self.process_codex_threads(state, max_batch),
             "claude_records": self.process_claude_files(state, max_batch, since=since),
+            "pi_records": self.process_pi_files(state, max_batch, since=since),
         }
 
     def emit(self, trace: NormalizedTrace) -> None:
@@ -297,6 +319,82 @@ class AgentIngestor:
                     for trace in claude_record_to_traces(record, self.git, self.config.include_text):
                         trace.extra["jsonl_path"] = file_key
                         self.emit(trace)
+                    processed += 1
+            entry.update({"offset": offset, "inode": stat.st_ino, "mtime": stat.st_mtime})
+        return processed
+
+    def pi_event_log_paths(self) -> list[Path]:
+        paths: list[Path] = []
+        seen: set[str] = set()
+        for pattern in str(self.config.pi_suggester_glob or "").split(os.pathsep):
+            pattern = pattern.strip()
+            if not pattern:
+                continue
+            expanded = str(Path(pattern).expanduser())
+            for match in glob.iglob(expanded, recursive=True):
+                candidate = Path(match).expanduser()
+                if candidate.is_file() and candidate.name == "events.ndjson":
+                    log_path = candidate
+                else:
+                    log_path = candidate / "logs" / "events.ndjson"
+                if not log_path.exists():
+                    continue
+                key = str(log_path)
+                if key not in seen:
+                    seen.add(key)
+                    paths.append(log_path)
+        return paths
+
+    def process_pi_files(self, state: dict[str, Any], max_batch: int, since: datetime | None = None) -> int:
+        files_state: dict[str, Any] = state.setdefault("pi_files", {})
+        processed = 0
+        for path in self.pi_event_log_paths():
+            if processed >= max_batch:
+                break
+            try:
+                stat = path.stat()
+            except FileNotFoundError:
+                continue
+            file_key = str(path)
+            entry = files_state.get(file_key)
+            if entry is None:
+                initial_offset = stat.st_size if state.get("initialized_at") else 0
+                entry = {"offset": initial_offset, "inode": stat.st_ino, "mtime": stat.st_mtime}
+                files_state[file_key] = entry
+            offset = int(entry.get("offset", 0) or 0)
+            if offset > stat.st_size:
+                offset = 0
+            if offset == stat.st_size:
+                entry.update({"offset": offset, "inode": stat.st_ino, "mtime": stat.st_mtime})
+                continue
+
+            suggester_root = path.parent.parent
+            with path.open("rb") as handle:
+                handle.seek(offset)
+                for raw_line in handle:
+                    if processed >= max_batch:
+                        break
+                    start_offset = offset
+                    offset += len(raw_line)
+                    line = raw_line.decode("utf-8", errors="replace").strip()
+                    if not line:
+                        continue
+                    try:
+                        record = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    record_ts = parse_timestamp(record.get("at"))
+                    if since and record_ts and record_ts < since:
+                        continue
+                    trace = pi_event_to_trace(
+                        record,
+                        suggester_root,
+                        self.git,
+                        self.config.include_text,
+                        source_event_id=f"pi-log:{file_key}:{start_offset}",
+                    )
+                    trace.extra["ndjson_path"] = file_key
+                    self.emit(trace)
                     processed += 1
             entry.update({"offset": offset, "inode": stat.st_ino, "mtime": stat.st_mtime})
         return processed
@@ -543,6 +641,130 @@ def claude_record_to_traces(record: dict[str, Any], git: GitMetadataCache, inclu
     return traces
 
 
+def pi_event_to_trace(
+    record: dict[str, Any],
+    suggester_root: Path,
+    git: GitMetadataCache,
+    include_text: bool,
+    source_event_id: str | None = None,
+) -> NormalizedTrace:
+    meta = record.get("meta") if isinstance(record.get("meta"), dict) else {}
+    message = str(record.get("message") or "event")
+    timestamp = parse_timestamp(record.get("at"))
+    cwd = _pi_cwd_from_root(suggester_root)
+    git_meta = git.for_cwd(cwd)
+    token_usage = _pi_token_usage(meta)
+    measurements = _pi_measurements(meta)
+    status = str(meta.get("status") or "").lower()
+    level = str(record.get("level") or "info")
+    success = False if level.lower() == "error" or status == "error" else True
+    trace = NormalizedTrace(
+        agent="pi",
+        kind=message.replace(" ", "_"),
+        timestamp=timestamp,
+        level=level,
+        source_event_id=source_event_id,
+        session_id=str(meta.get("sessionId") or meta.get("runId") or short_hash(str(suggester_root)) or "pi"),
+        turn_id=_pi_turn_id(meta),
+        project=infer_project(cwd),
+        cwd=cwd,
+        repo=git_meta["repo"],
+        git_branch=git_meta["git_branch"],
+        git_sha=git_meta["git_sha"],
+        model=meta.get("model") if isinstance(meta.get("model"), str) else None,
+        provider="pi",
+        tool_name=meta.get("tool") if isinstance(meta.get("tool"), str) else None,
+        tool_kind="pi_tool" if meta.get("tool") else None,
+        command_kind="pi_suggester",
+        duration_ms=_float_or_none(meta.get("latencyMs")),
+        success=success,
+        token_usage=token_usage,
+        measurements=measurements,
+        tags={
+            "pi_message": message,
+            "variant_name": meta.get("variantName"),
+            "strategy": meta.get("strategy"),
+            "requested_strategy": meta.get("requestedStrategy"),
+            "status": meta.get("status"),
+            "classification": meta.get("classification"),
+        },
+        extra={
+            "pi_root": str(suggester_root),
+            "meta": _summarize_pi_meta(meta, include_text),
+        },
+    )
+    apply_cost_estimate(trace)
+    return trace
+
+
+def _pi_token_usage(meta: dict[str, Any]) -> dict[str, int | float]:
+    usage: dict[str, int | float] = {}
+    for source_key, target_key in (
+        ("inputTokens", "input_tokens"),
+        ("outputTokens", "output_tokens"),
+        ("cacheReadTokens", "cache_read_input_tokens"),
+        ("cacheWriteTokens", "cache_creation_input_tokens"),
+    ):
+        value = _int_or_none(meta.get(source_key))
+        if value is not None:
+            usage[target_key] = value
+    return usage
+
+
+def _pi_measurements(meta: dict[str, Any]) -> dict[str, int | float]:
+    measurements: dict[str, int | float] = {}
+    for source_key, target_key in (
+        ("totalTokens", "total_tokens"),
+        ("cost", "cost_usd"),
+        ("suggestionChars", "suggestion_chars"),
+        ("similarity", "similarity"),
+        ("assistantCacheReadTokens", "assistant_cache_read_tokens"),
+        ("assistantCacheWriteTokens", "assistant_cache_write_tokens"),
+        ("step", "step"),
+        ("maxSteps", "max_steps"),
+        ("tokens", "total_tokens"),
+    ):
+        value = _float_or_none(meta.get(source_key))
+        if value is not None:
+            measurements[target_key] = value
+    return measurements
+
+
+def _pi_turn_id(meta: dict[str, Any]) -> str | None:
+    for key in ("turnId", "suggestionTurnId", "nextAssistantTurnId", "sourceLeafId", "runId"):
+        value = meta.get(key)
+        if value not in (None, ""):
+            return str(value)
+    return None
+
+
+def _pi_cwd_from_root(root: Path) -> str | None:
+    if root.name == "suggester" and root.parent.name == ".pi":
+        return str(root.parent.parent)
+    return None
+
+
+def _summarize_pi_meta(value: Any, include_text: bool, key: str | None = None) -> Any:
+    if isinstance(value, str):
+        if key in PI_TEXT_KEYS:
+            if include_text:
+                return redact_text(value)
+            return {f"{key}_len": len(value), f"{key}_hash": short_hash(value)}
+        return redact_text(value) if include_text else value
+    if isinstance(value, list):
+        return [_summarize_pi_meta(item, include_text) for item in value[:50]]
+    if isinstance(value, dict):
+        result: dict[str, Any] = {}
+        for item_key, item_value in value.items():
+            summarized = _summarize_pi_meta(item_value, include_text, str(item_key))
+            if isinstance(summarized, dict) and set(summarized).issubset({f"{item_key}_len", f"{item_key}_hash"}):
+                result.update(summarized)
+            else:
+                result[str(item_key)] = summarized
+        return scrub(result) if include_text else result
+    return value
+
+
 def _tool_result_is_error(content: Any) -> bool:
     if not isinstance(content, list):
         return False
@@ -567,6 +789,15 @@ def _int_or_none(value: Any) -> int | None:
         return None
     try:
         return int(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _float_or_none(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        return float(str(value))
     except (TypeError, ValueError):
         return None
 

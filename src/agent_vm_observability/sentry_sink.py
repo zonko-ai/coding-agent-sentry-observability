@@ -47,7 +47,8 @@ class SentrySink:
             before_send_transaction=lambda event, hint: scrub(event),
         )
         sentry_sdk.set_tag("agent_vm_observability.version", VERSION)
-        sentry_sdk.set_user({"id": os.environ.get("USER", "local-user")})
+        if os.environ.get("AGENT_VM_SENTRY_SET_USER", "").strip().lower() in {"1", "true", "yes", "on"}:
+            sentry_sdk.set_user({"id": os.environ.get("USER", "local-user")})
         self._sentry_sdk = sentry_sdk
         self.enabled = True
         return True

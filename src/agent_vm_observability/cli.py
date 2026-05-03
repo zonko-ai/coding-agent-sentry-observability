@@ -23,7 +23,7 @@ from .timeutil import utc_now
 
 def main(argv: list[str] | None = None) -> int:
     load_env_files()
-    parser = argparse.ArgumentParser(description="Local observability and memory for agent usage on this VM.")
+    parser = argparse.ArgumentParser(description="Local observability and memory for coding agents.")
     sub = parser.add_subparsers(dest="command")
 
     bridge = sub.add_parser("bridge", help="Run the Sentry/memory bridge.")
@@ -62,7 +62,7 @@ def main(argv: list[str] | None = None) -> int:
     search.add_argument("--limit", type=int, default=10)
     context = memory_sub.add_parser("context")
     context.add_argument("--cwd", required=True)
-    context.add_argument("--agent", choices=["codex", "claude-code"], required=True)
+    context.add_argument("--agent", choices=["codex", "claude-code", "pi"], required=True)
     context.add_argument("--limit", type=int, default=12)
     summarize = memory_sub.add_parser("summarize-session")
     summarize.add_argument("session_id")
@@ -155,6 +155,7 @@ def cmd_status(config: Any) -> int:
         "legacy_config_path": str(config.legacy_config_path),
         "state_path": str(config.state_path),
         "memory_db_path": str(config.memory_db_path),
+        "pi_suggester_glob": config.pi_suggester_glob,
         "dsn_configured": bool(config.sentry_dsn),
         "sentry_org": config.sentry_org,
         "sentry_project": config.sentry_project,
@@ -162,6 +163,7 @@ def cmd_status(config: Any) -> int:
         "codex_logs_last_id": state.get("codex_logs_last_id"),
         "codex_threads_last_updated_ms": state.get("codex_threads_last_updated_ms"),
         "claude_files_tracked": len(state.get("claude_files", {})),
+        "pi_files_tracked": len(state.get("pi_files", {})),
         "memory_counts": counts,
         "usage_24h": usage_24h,
         "launchd": launchd_status().splitlines()[:8],
@@ -178,7 +180,7 @@ def cmd_self_test(config: Any, dry_run: bool) -> int:
     marker = f"agent-vm-self-test-{int(time.time())}-{os.getpid()}"
     from .model import NormalizedTrace
 
-    for agent in ("claude-code", "codex"):
+    for agent in ("claude-code", "codex", "pi"):
         trace = NormalizedTrace(
             agent=agent,
             kind="self_test",

@@ -12,3 +12,11 @@ def test_status_smoke(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("AGENT_VM_STATE", str(tmp_path / "state.json"))
     assert main(["status"]) == 0
 
+
+def test_memory_context_accepts_pi_agent(monkeypatch, tmp_path, capsys) -> None:
+    monkeypatch.setenv("AGENT_VM_MEMORY_DB", str(tmp_path / "memory.db"))
+    monkeypatch.setenv("AGENT_VM_STATE", str(tmp_path / "state.json"))
+
+    assert main(["memory", "context", "--cwd", str(tmp_path), "--agent", "pi"]) == 0
+
+    assert "target_agent: pi" in capsys.readouterr().out

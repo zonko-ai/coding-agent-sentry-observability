@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from .redaction import safe_tag_value, scrub, short_hash
+from .redaction import safe_path_tag_value, safe_tag_value, scrub, short_hash
 from .timeutil import to_timestamp
 
 
@@ -175,15 +175,17 @@ class NormalizedTrace:
             "success": "success",
             "vm_host": "vm_host",
         }
-        tags = {
-            f"{self.sentry_source}.{key}": safe_tag_value(value)
-            for key, value in base.items()
-            if value not in (None, "")
-        }
+        tags = {}
+        for key, value in base.items():
+            if value in (None, ""):
+                continue
+            formatter = safe_path_tag_value if key in {"cwd", "repo"} else safe_tag_value
+            tags[f"{self.sentry_source}.{key}"] = formatter(value)
         for key, alias in alias_keys.items():
             value = base.get(key)
             if value not in (None, ""):
-                tags[alias] = safe_tag_value(value)
+                formatter = safe_path_tag_value if key in {"cwd", "repo"} else safe_tag_value
+                tags[alias] = formatter(value)
         return tags
 
     def sentry_extra(self) -> dict[str, Any]:
