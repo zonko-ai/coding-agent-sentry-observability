@@ -1,23 +1,21 @@
 {
   "dashboards": [
     {
-      "title": "Agent VM Usage Overview",
-      "purpose": "Top-level health for Codex and Claude Code local traces",
+      "title": "Coding Agents Usage Overview",
+      "purpose": "Top-level health for Pi, Claude Code, and Codex local traces",
       "queries": [
-        "title:codex*",
-        "title:claude*",
+        "agent:pi OR agent:claude-code OR agent:codex",
         "event.type:transaction"
       ]
     },
     {
-      "title": "Agent VM Tool And Token Health",
-      "purpose": "Tool, assistant turn, websocket, and error-level trace views",
+      "title": "Coding Agents Tool And Token Health",
+      "purpose": "Tool, assistant turn, subagent, websocket, and error-level trace views",
       "queries": [
         "title:*tool*",
-        "title:claude.assistant_turn",
+        "title:pi.assistant_turn OR title:claude.assistant_turn",
         "level:error"
       ]
     }
   ]
 }
-

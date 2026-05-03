@@ -4,13 +4,12 @@ import json
 import sqlite3
 import time
 from contextlib import closing
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from .model import NormalizedTrace, infer_project
 from .redaction import short_hash
-from .timeutil import parse_timestamp, to_timestamp
+from .timeutil import to_timestamp
 
 
 SCHEMA = """
@@ -197,14 +196,6 @@ create virtual table if not exists memories_fts using fts5(
 );
 """
 
-
-@dataclass
-class ImportResult:
-    sessions: int = 0
-    turns: int = 0
-    observations: int = 0
-    summaries: int = 0
-    memories: int = 0
 
 
 USAGE_SUM_KEYS = (
@@ -429,240 +420,6 @@ class MemoryStore:
         ).fetchone()
         return int(row["id"]) if row else None
 
-    def import_claude_mem(self, source_db: Path) -> ImportResult:
-        if not source_db.exists():
-            raise FileNotFoundError(source_db)
-        self.initialize()
-        result = ImportResult()
-        source_uri = f"file:{source_db}?mode=ro&cache=shared"
-        src = sqlite3.connect(source_uri, uri=True)
-        src.row_factory = sqlite3.Row
-        try:
-            with closing(self.connect()) as dst:
-                with dst:
-                    agent_id = self.agent_id(dst, "claude-code")
-                    session_map: dict[str, int] = {}
-                    for row in src.execute("select * from sdk_sessions"):
-                        project = row["project"]
-                        content_session_id = row["content_session_id"]
-                        dst.execute(
-                            """
-                            insert into agent_sessions(agent_id, external_session_id, project, started_at, started_at_epoch,
-                              last_seen_at, last_seen_at_epoch, status, metadata_json)
-                            values (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                            on conflict(agent_id, external_session_id) do update set
-                              project=excluded.project,
-                              last_seen_at=coalesce(excluded.last_seen_at, agent_sessions.last_seen_at),
-                              last_seen_at_epoch=coalesce(excluded.last_seen_at_epoch, agent_sessions.last_seen_at_epoch),
-                              metadata_json=excluded.metadata_json
-                            """,
-                            (
-                                agent_id,
-                                content_session_id,
-                                project,
-                                row["started_at"],
-                                row["started_at_epoch"],
-                                row["completed_at"],
-                                row["completed_at_epoch"],
-                                row["status"],
-                                json.dumps(_row_payload(row), sort_keys=True, default=str),
-                            ),
-                        )
-                        session_id = int(
-                            dst.execute(
-                                "select id from agent_sessions where agent_id=? and external_session_id=?",
-                                (agent_id, content_session_id),
-                            ).fetchone()["id"]
-                        )
-                        session_map[content_session_id] = session_id
-                        result.sessions += 1
-
-                    for row in src.execute("select * from user_prompts"):
-                        session_db_id = session_map.get(row["content_session_id"])
-                        if not session_db_id:
-                            continue
-                        external_turn_id = f"claude-mem-prompt-{row['id']}"
-                        prompt_text = row["prompt_text"] or ""
-                        dst.execute(
-                            """
-                            insert or ignore into turns(session_db_id, external_turn_id, prompt_number, prompt_text, prompt_hash,
-                              started_at, started_at_epoch, metadata_json)
-                            values (?, ?, ?, ?, ?, ?, ?, ?)
-                            """,
-                            (
-                                session_db_id,
-                                external_turn_id,
-                                row["prompt_number"],
-                                prompt_text,
-                                short_hash(prompt_text),
-                                row["created_at"],
-                                row["created_at_epoch"],
-                                json.dumps({"source": "claude-mem", "source_id": row["id"]}, sort_keys=True),
-                            ),
-                        )
-                        result.turns += 1
-
-                    memory_session_map = {
-                        row["memory_session_id"]: row["content_session_id"]
-                        for row in src.execute("select memory_session_id, content_session_id from sdk_sessions where memory_session_id is not null")
-                    }
-                    memory_ids: list[int] = []
-                    for row in src.execute("select * from observations"):
-                        source_id = str(row["id"])
-                        source_session = memory_session_map.get(row["memory_session_id"])
-                        body = _join_text(row, ["narrative", "facts", "concepts", "text"])
-                        dst.execute(
-                            """
-                            insert or ignore into observations(source, source_id, agent, source_session_id, project, type, title, subtitle,
-                              facts, narrative, concepts, files_read, files_modified, prompt_number, discovery_tokens,
-                              created_at, created_at_epoch, content_hash)
-                            values ('claude-mem', ?, 'claude-code', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                            """,
-                            (
-                                source_id,
-                                source_session,
-                                row["project"],
-                                row["type"],
-                                row["title"],
-                                row["subtitle"],
-                                row["facts"],
-                                row["narrative"],
-                                row["concepts"],
-                                row["files_read"],
-                                row["files_modified"],
-                                row["prompt_number"],
-                                row["discovery_tokens"],
-                                row["created_at"],
-                                row["created_at_epoch"],
-                                row["content_hash"] or short_hash(body),
-                            ),
-                        )
-                        memory_id = self._insert_memory_from_source(
-                            dst,
-                            source_id=source_id,
-                            source_table="observations",
-                            agent="claude-code",
-                            source_session_id=source_session,
-                            project=row["project"],
-                            mem_type=row["type"] or "observation",
-                            title=row["title"],
-                            body=body,
-                            created_at=row["created_at"],
-                            created_at_epoch=row["created_at_epoch"],
-                            payload=_row_payload(row),
-                        )
-                        if memory_id:
-                            memory_ids.append(memory_id)
-                        result.observations += 1
-
-                    for row in src.execute("select * from session_summaries"):
-                        source_id = str(row["id"])
-                        source_session = memory_session_map.get(row["memory_session_id"])
-                        body = _join_text(row, ["request", "investigated", "learned", "completed", "next_steps", "notes"])
-                        dst.execute(
-                            """
-                            insert or ignore into session_summaries(source, source_id, agent, source_session_id, project, request,
-                              investigated, learned, completed, next_steps, files_read, files_edited, notes, prompt_number,
-                              discovery_tokens, created_at, created_at_epoch)
-                            values ('claude-mem', ?, 'claude-code', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                            """,
-                            (
-                                source_id,
-                                source_session,
-                                row["project"],
-                                row["request"],
-                                row["investigated"],
-                                row["learned"],
-                                row["completed"],
-                                row["next_steps"],
-                                row["files_read"],
-                                row["files_edited"],
-                                row["notes"],
-                                row["prompt_number"],
-                                row["discovery_tokens"],
-                                row["created_at"],
-                                row["created_at_epoch"],
-                            ),
-                        )
-                        memory_id = self._insert_memory_from_source(
-                            dst,
-                            source_id=source_id,
-                            source_table="session_summaries",
-                            agent="claude-code",
-                            source_session_id=source_session,
-                            project=row["project"],
-                            mem_type="session_summary",
-                            title=row["request"] or f"Session summary {source_id}",
-                            body=body,
-                            created_at=row["created_at"],
-                            created_at_epoch=row["created_at_epoch"],
-                            payload=_row_payload(row),
-                        )
-                        if memory_id:
-                            memory_ids.append(memory_id)
-                        result.summaries += 1
-
-                    result.memories = len(memory_ids)
-                    self.rebuild_fts(dst)
-        finally:
-            src.close()
-        return result
-
-    def _insert_memory_from_source(
-        self,
-        conn: sqlite3.Connection,
-        *,
-        source_id: str,
-        source_table: str,
-        agent: str,
-        source_session_id: str | None,
-        project: str | None,
-        mem_type: str,
-        title: str | None,
-        body: str,
-        created_at: str | None,
-        created_at_epoch: int | None,
-        payload: dict[str, Any],
-    ) -> int | None:
-        if not body.strip() and not (title or "").strip():
-            return None
-        content_hash = short_hash(f"{title or ''}\n{body}")
-        conn.execute(
-            """
-            insert or ignore into memories(source, source_id, agent, source_session_id, project, scope, type, title, body,
-              confidence, status, evidence_json, created_at, created_at_epoch, content_hash)
-            values ('claude-mem', ?, ?, ?, ?, 'project', ?, ?, ?, 0.8, 'active', ?, ?, ?, ?)
-            """,
-            (
-                source_id,
-                agent,
-                source_session_id,
-                project,
-                mem_type,
-                title,
-                body,
-                json.dumps({"source_table": source_table, "source_id": source_id}, sort_keys=True),
-                created_at,
-                created_at_epoch,
-                content_hash,
-            ),
-        )
-        row = conn.execute(
-            "select id from memories where source='claude-mem' and source_id=? and type=?",
-            (source_id, mem_type),
-        ).fetchone()
-        if not row:
-            return None
-        memory_id = int(row["id"])
-        conn.execute(
-            """
-            insert or ignore into memory_sources(memory_id, source, source_id, source_table, source_payload_json)
-            values (?, 'claude-mem', ?, ?, ?)
-            """,
-            (memory_id, source_id, source_table, json.dumps(payload, sort_keys=True, default=str)),
-        )
-        return memory_id
-
     def search(self, query: str, limit: int = 10) -> list[dict[str, Any]]:
         self.initialize()
         with closing(self.connect()) as conn:
@@ -722,7 +479,7 @@ class MemoryStore:
                 (project,),
             ).fetchall()
 
-        lines = [f"# Agent VM Context", "", f"- target_agent: {agent}", f"- cwd: {cwd}", f"- project: {project}", ""]
+        lines = ["# Coding Agent Context", "", f"- target_agent: {agent}", f"- cwd: {cwd}", f"- project: {project}", ""]
         lines.append("## Active Memories")
         if not memories:
             lines.append("- No active memories found for this project.")
@@ -809,14 +566,6 @@ class MemoryStore:
                     (cutoff_epoch,),
                 ).fetchone()["n"]
             )
-            import_status = conn.execute(
-                """
-                select count(*) as imported_items, max(created_at) as latest_created_at
-                from memories
-                where source = 'claude-mem'
-                """
-            ).fetchone()
-
         totals = _usage_bucket()
         by_agent: dict[str, dict[str, Any]] = {}
         by_model: dict[str, dict[str, Any]] = {}
@@ -906,10 +655,6 @@ class MemoryStore:
             "recent_sessions": _finalize_recent_sessions(by_session, top_n),
             "recent_failures": recent_failures,
             "pricing_notes": sorted(pricing_notes),
-            "import_status": {
-                "claude_mem_sources": int(import_status["imported_items"] or 0) if import_status else 0,
-                "latest_created_at": import_status["latest_created_at"] if import_status else None,
-            },
         }
 
     def dashboard_snapshot(self, hours: int = 24, limit: int = 12) -> dict[str, Any]:
@@ -963,19 +708,6 @@ def _bool_int(value: bool | None) -> int | None:
     if value is None:
         return None
     return 1 if value else 0
-
-
-def _row_payload(row: sqlite3.Row) -> dict[str, Any]:
-    return {key: row[key] for key in row.keys()}
-
-
-def _join_text(row: sqlite3.Row, keys: Iterable[str]) -> str:
-    parts: list[str] = []
-    for key in keys:
-        value = row[key] if key in row.keys() else None
-        if value:
-            parts.append(str(value))
-    return "\n\n".join(parts)
 
 
 def _json_object(value: str | None) -> dict[str, Any]:

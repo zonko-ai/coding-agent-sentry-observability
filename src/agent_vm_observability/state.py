@@ -7,7 +7,14 @@ from typing import Any
 
 
 def empty_state() -> dict[str, Any]:
-    return {"version": 1, "claude_files": {}, "codex_threads_last_updated_ms": 0, "codex_threads_last_id": "", "codex_logs_last_id": 0}
+    return {
+        "version": 1,
+        "claude_files": {},
+        "pi_files": {},
+        "codex_threads_last_updated_ms": 0,
+        "codex_threads_last_id": "",
+        "codex_logs_last_id": 0,
+    }
 
 
 class StateStore:

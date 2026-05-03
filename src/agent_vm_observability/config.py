@@ -14,7 +14,7 @@ MEMORY_DB_PATH = HOME / ".agent-vm-observability/memory.db"
 CODEX_LOGS_DB = HOME / ".codex/logs_2.sqlite"
 CODEX_STATE_DB = HOME / ".codex/state_5.sqlite"
 CLAUDE_PROJECTS_GLOB = str(HOME / ".claude/projects/**/*.jsonl")
-CLAUDE_MEM_DB = HOME / ".claude-mem/claude-mem.db"
+PI_SESSIONS_GLOB = str(HOME / ".pi/agent/sessions/**/*.jsonl")
 
 
 def _parse_env_line(line: str) -> tuple[str, str] | None:
@@ -79,7 +79,7 @@ class RuntimeConfig:
     codex_logs_db: Path
     codex_state_db: Path
     claude_projects_glob: str
-    claude_mem_db: Path
+    pi_sessions_glob: str
     sentry_dsn: str | None
     sentry_org: str
     sentry_project: str
@@ -100,7 +100,7 @@ def get_config() -> RuntimeConfig:
         codex_logs_db=env_path("AGENT_VM_CODEX_LOGS_DB", env_path("AGENT_SENTRY_CODEX_LOGS_DB", CODEX_LOGS_DB)),
         codex_state_db=env_path("AGENT_VM_CODEX_STATE_DB", env_path("AGENT_SENTRY_CODEX_STATE_DB", CODEX_STATE_DB)),
         claude_projects_glob=os.environ.get("AGENT_VM_CLAUDE_GLOB") or os.environ.get("AGENT_SENTRY_CLAUDE_GLOB") or CLAUDE_PROJECTS_GLOB,
-        claude_mem_db=env_path("AGENT_VM_CLAUDE_MEM_DB", CLAUDE_MEM_DB),
+        pi_sessions_glob=os.environ.get("AGENT_VM_PI_GLOB") or PI_SESSIONS_GLOB,
         sentry_dsn=os.environ.get("SENTRY_DSN") or os.environ.get("AGENT_SENTRY_DSN"),
         sentry_org=os.environ.get("SENTRY_ORG", ""),
         sentry_project=os.environ.get("SENTRY_PROJECT", "agent-vm-usage"),

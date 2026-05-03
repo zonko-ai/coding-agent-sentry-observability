@@ -3,11 +3,11 @@ from agent_vm_observability.redaction import redact_text, scrub
 
 
 def test_redacts_common_secret_shapes() -> None:
-    text = "OPENAI_API_KEY=sk-1234567890abcdef password=hunter2 user=sahan@example.com"
+    text = "OPENAI_API_KEY=sk-1234567890abcdef password=hunter2 user=user@example.com"
     redacted = redact_text(text)
     assert "sk-1234567890abcdef" not in redacted
     assert "hunter2" not in redacted
-    assert "sahan@example.com" not in redacted
+    assert "user@example.com" not in redacted
     assert "[redacted" in redacted
 
 

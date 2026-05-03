@@ -110,8 +110,8 @@ def content_summary(content: Any, include_text: bool) -> dict[str, Any]:
             elif block_type == "thinking":
                 thinking = str(block.get("thinking", ""))
                 summary["thinking_len"] = int(summary.get("thinking_len", 0)) + len(thinking)
-            elif block_type == "tool_use":
-                tool_input = block.get("input")
+            elif block_type in {"tool_use", "toolCall"}:
+                tool_input = block.get("input") if block_type == "tool_use" else block.get("arguments")
                 tool_uses.append(
                     {
                         "id": block.get("id"),
@@ -199,15 +199,8 @@ class AgentIngestor:
             except Exception as exc:
                 log(f"codex thread initialization failed: {exc}")
 
-        claude_files: dict[str, Any] = state.setdefault("claude_files", {})
-        for path_text in glob.iglob(self.config.claude_projects_glob, recursive=True):
-            path = Path(path_text)
-            try:
-                stat = path.stat()
-            except FileNotFoundError:
-                continue
-            offset = 0 if cutoff_seconds and stat.st_mtime >= cutoff_seconds else stat.st_size
-            claude_files[str(path)] = {"offset": offset, "inode": stat.st_ino, "mtime": stat.st_mtime}
+        self._initialize_file_offsets(state.setdefault("claude_files", {}), self.config.claude_projects_glob, cutoff_seconds)
+        self._initialize_file_offsets(state.setdefault("pi_files", {}), self.config.pi_sessions_glob, cutoff_seconds)
         state["initialized_at"] = int(time.time())
         state["initialization_mode"] = f"backfill-since:{backfill_since.isoformat()}" if backfill_since else "current-watermarks"
 
@@ -216,7 +209,20 @@ class AgentIngestor:
             "codex_logs": self.process_codex_logs(state, max_batch),
             "codex_threads": self.process_codex_threads(state, max_batch),
             "claude_records": self.process_claude_files(state, max_batch, since=since),
+            "pi_records": self.process_pi_files(state, max_batch, since=since),
         }
+
+    def _initialize_file_offsets(self, files_state: dict[str, Any], pattern: str, cutoff_seconds: int | None) -> None:
+        for path_text in glob.iglob(pattern, recursive=True):
+            path = Path(path_text)
+            if "subagent-artifacts" in path.parts:
+                continue
+            try:
+                stat = path.stat()
+            except FileNotFoundError:
+                continue
+            offset = 0 if cutoff_seconds and stat.st_mtime >= cutoff_seconds else stat.st_size
+            files_state[str(path)] = {"offset": offset, "inode": stat.st_ino, "mtime": stat.st_mtime}
 
     def emit(self, trace: NormalizedTrace) -> None:
         self.sink.capture(trace)
@@ -326,6 +332,348 @@ class AgentIngestor:
                     processed += 1
             entry.update({"offset": offset, "inode": stat.st_ino, "mtime": stat.st_mtime})
         return processed
+
+    def process_pi_files(self, state: dict[str, Any], max_batch: int, since: datetime | None = None) -> int:
+        files_state: dict[str, Any] = state.setdefault("pi_files", {})
+        processed = 0
+        for path_text in glob.iglob(self.config.pi_sessions_glob, recursive=True):
+            if processed >= max_batch:
+                break
+            path = Path(path_text)
+            if "subagent-artifacts" in path.parts:
+                continue
+            try:
+                stat = path.stat()
+            except FileNotFoundError:
+                continue
+            file_key = str(path)
+            entry = files_state.get(file_key)
+            if entry is None:
+                entry = {"offset": 0, "inode": stat.st_ino, "mtime": stat.st_mtime}
+                files_state[file_key] = entry
+            offset = int(entry.get("offset", 0) or 0)
+            if offset > stat.st_size:
+                offset = 0
+            if offset == stat.st_size:
+                entry.update({"offset": offset, "inode": stat.st_ino, "mtime": stat.st_mtime})
+                continue
+
+            header = read_pi_session_header(path)
+            with path.open("rb") as handle:
+                handle.seek(offset)
+                for raw_line in handle:
+                    if processed >= max_batch:
+                        break
+                    offset += len(raw_line)
+                    line = raw_line.decode("utf-8", errors="replace").strip()
+                    if not line:
+                        continue
+                    try:
+                        record = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    record_ts = parse_timestamp(record.get("timestamp"))
+                    if since and record_ts and record_ts < since:
+                        continue
+                    if record.get("type") == "session":
+                        header = record
+                    for trace in pi_record_to_traces(record, header, self.git, self.config.include_text):
+                        trace.extra["jsonl_path"] = file_key
+                        self.emit(trace)
+                    processed += 1
+            entry.update({"offset": offset, "inode": stat.st_ino, "mtime": stat.st_mtime})
+        return processed
+
+
+def read_pi_session_header(path: Path) -> dict[str, Any]:
+    try:
+        with path.open("rb") as handle:
+            line = handle.readline().decode("utf-8", errors="replace").strip()
+    except OSError:
+        return {}
+    if not line:
+        return {}
+    try:
+        record = json.loads(line)
+    except json.JSONDecodeError:
+        return {}
+    return record if isinstance(record, dict) and record.get("type") == "session" else {}
+
+
+def flatten_pi_usage(usage: dict[str, Any] | None) -> tuple[dict[str, int | float], dict[str, int | float]]:
+    if not isinstance(usage, dict):
+        return {}, {}
+    token_usage: dict[str, int | float] = {}
+    measurements: dict[str, int | float] = {}
+    for source_key, target_key in (
+        ("input", "input_tokens"),
+        ("output", "output_tokens"),
+        ("cacheRead", "cache_read_input_tokens"),
+        ("cacheWrite", "cache_creation_input_tokens"),
+    ):
+        value = usage.get(source_key)
+        if isinstance(value, (int, float)):
+            token_usage[target_key] = value
+    total_tokens = usage.get("totalTokens")
+    if isinstance(total_tokens, (int, float)):
+        measurements["total_tokens"] = total_tokens
+    cost = usage.get("cost")
+    if isinstance(cost, dict):
+        for source_key, target_key in (
+            ("input", "input_cost_usd"),
+            ("output", "output_cost_usd"),
+            ("cacheRead", "cache_read_cost_usd"),
+            ("cacheWrite", "cache_write_cost_usd"),
+            ("total", "cost_usd"),
+        ):
+            value = cost.get(source_key)
+            if isinstance(value, (int, float)):
+                measurements[target_key] = value
+    return token_usage, measurements
+
+
+def pi_record_to_traces(record: dict[str, Any], header: dict[str, Any], git: GitMetadataCache, include_text: bool) -> list[NormalizedTrace]:
+    record_type = str(record.get("type", "unknown")).replace("-", "_")
+    session_id = str(header.get("id") or record.get("sessionId") or record.get("id") or "")
+    cwd = record.get("cwd") or header.get("cwd")
+    timestamp = parse_timestamp(record.get("timestamp")) or parse_timestamp(header.get("timestamp"))
+    git_meta = git.for_cwd(cwd)
+    base_extra = {
+        "entry_id": record.get("id"),
+        "parent_id": record.get("parentId"),
+        "session_version": header.get("version"),
+        "parent_session": header.get("parentSession"),
+    }
+    base_tags = {"entry_type": record_type}
+    base = {
+        "agent": "pi",
+        "timestamp": timestamp,
+        "session_id": session_id or None,
+        "trace_id": session_id or None,
+        "project": infer_project(cwd),
+        "cwd": cwd,
+        "repo": git_meta["repo"],
+        "git_branch": git_meta["git_branch"],
+        "git_sha": git_meta["git_sha"],
+    }
+    traces: list[NormalizedTrace] = []
+
+    def append_trace(trace: NormalizedTrace) -> None:
+        if "cost_usd" not in trace.measurements:
+            apply_cost_estimate(trace)
+        traces.append(trace)
+
+    if record_type == "session":
+        append_trace(
+            NormalizedTrace(
+                **base,
+                kind="session_start",
+                source_event_id=f"pi:{session_id}:session",
+                tags=base_tags,
+                extra={**base_extra, "session": value_summary(record)},
+            )
+        )
+        return traces
+
+    if record_type == "model_change":
+        append_trace(
+            NormalizedTrace(
+                **base,
+                kind="model_change",
+                source_event_id=f"pi:{session_id}:{record.get('id')}:model-change",
+                model=record.get("modelId"),
+                provider=record.get("provider"),
+                tags=base_tags,
+                extra=base_extra,
+            )
+        )
+        return traces
+
+    if record_type == "thinking_level_change":
+        append_trace(
+            NormalizedTrace(
+                **base,
+                kind="thinking_level_change",
+                source_event_id=f"pi:{session_id}:{record.get('id')}:thinking-level-change",
+                tags={**base_tags, "thinking_level": record.get("thinkingLevel")},
+                extra=base_extra,
+            )
+        )
+        return traces
+
+    message = record.get("message")
+    if isinstance(message, dict):
+        traces.extend(pi_message_to_traces(record, message, base, base_extra, base_tags, include_text))
+        return traces
+
+    append_trace(
+        NormalizedTrace(
+            **base,
+            kind=record_type,
+            source_event_id=f"pi:{session_id}:{record.get('id')}:{record_type}",
+            tags=base_tags,
+            extra={**base_extra, "record": scrub(record) if include_text else value_summary(record)},
+        )
+    )
+    return traces
+
+
+def pi_message_to_traces(
+    record: dict[str, Any],
+    message: dict[str, Any],
+    base: dict[str, Any],
+    base_extra: dict[str, Any],
+    base_tags: dict[str, Any],
+    include_text: bool,
+) -> list[NormalizedTrace]:
+    role = str(message.get("role", "message")).replace("-", "_")
+    entry_id = record.get("id")
+    session_id = base.get("session_id") or ""
+    timestamp = parse_timestamp(message.get("timestamp")) or base.get("timestamp")
+    content = message.get("content")
+    summary = content_summary(content, include_text)
+    token_usage, measurements = flatten_pi_usage(message.get("usage"))
+    stop_reason = message.get("stopReason")
+    success = None
+    level = "info"
+    if role == "assistant" and stop_reason in {"error", "aborted"}:
+        success = False
+        level = "error"
+    if role == "toolResult":
+        success = not bool(message.get("isError"))
+        level = "error" if message.get("isError") else "info"
+    if role == "bashExecution":
+        exit_code = message.get("exitCode")
+        cancelled = bool(message.get("cancelled"))
+        success = (exit_code == 0) and not cancelled if exit_code is not None else not cancelled
+        level = "error" if not success else "info"
+
+    kind_by_role = {
+        "user": "user_prompt",
+        "assistant": "assistant_turn",
+        "toolResult": "tool_result",
+        "bashExecution": "bash_execution",
+        "custom": "custom_message",
+        "branchSummary": "branch_summary",
+        "compactionSummary": "compaction_summary",
+    }
+    kind = kind_by_role.get(role, role)
+    tool_name = message.get("toolName") if role == "toolResult" else ("bash" if role == "bashExecution" else None)
+    extra = {
+        **base_extra,
+        "role": role,
+        "content_summary": summary,
+        "stop_reason": stop_reason,
+        "api": message.get("api"),
+    }
+    if message.get("errorMessage"):
+        extra["error_message"] = redact_text(str(message.get("errorMessage")))
+    if role == "toolResult" and message.get("details") is not None:
+        extra["details"] = scrub(message.get("details")) if include_text else value_summary(message.get("details"))
+    if role == "bashExecution":
+        extra.update(
+            {
+                "command": redact_text(str(message.get("command") or "")) if include_text else value_summary(message.get("command")),
+                "output": redact_text(str(message.get("output") or "")) if include_text else value_summary(message.get("output")),
+                "cancelled": message.get("cancelled"),
+                "truncated": message.get("truncated"),
+                "full_output_path": message.get("fullOutputPath"),
+            }
+        )
+
+    trace = NormalizedTrace(
+        **{**base, "timestamp": timestamp},
+        kind=kind,
+        level=level,
+        source_event_id=f"pi:{session_id}:{entry_id}:{kind}",
+        turn_id=str(entry_id) if entry_id else None,
+        model=message.get("model"),
+        provider=message.get("provider"),
+        tool_name=tool_name,
+        tool_kind="pi_tool" if tool_name else None,
+        command_kind="shell" if role == "bashExecution" else None,
+        success=success,
+        exit_code=message.get("exitCode") if role == "bashExecution" and isinstance(message.get("exitCode"), int) else None,
+        token_usage=token_usage,
+        measurements=measurements,
+        tags={**base_tags, "role": role, "stop_reason": stop_reason, "tool_name": tool_name},
+        extra=extra,
+    )
+    traces = [trace]
+    for tool in summary.get("tool_uses", []):
+        traces.append(
+            NormalizedTrace(
+                **{**base, "timestamp": timestamp},
+                kind="tool_use",
+                source_event_id=f"pi:{session_id}:{entry_id}:tool:{tool.get('id') or tool.get('name')}",
+                turn_id=str(entry_id) if entry_id else None,
+                model=message.get("model"),
+                provider=message.get("provider"),
+                tool_name=tool.get("name"),
+                tool_kind="pi_tool",
+                tags={**base_tags, "role": role, "tool_id": tool.get("id")},
+                extra={**base_extra, "tool": tool},
+            )
+        )
+    if role == "toolResult" and message.get("toolName") == "subagent":
+        traces.extend(pi_subagent_result_traces(record, message, base, base_extra, base_tags, include_text))
+    for item in traces:
+        if "cost_usd" not in item.measurements:
+            apply_cost_estimate(item)
+    return traces
+
+
+def pi_subagent_result_traces(
+    record: dict[str, Any],
+    message: dict[str, Any],
+    base: dict[str, Any],
+    base_extra: dict[str, Any],
+    base_tags: dict[str, Any],
+    include_text: bool,
+) -> list[NormalizedTrace]:
+    details = message.get("details")
+    if not isinstance(details, dict) or not isinstance(details.get("results"), list):
+        return []
+    traces: list[NormalizedTrace] = []
+    session_id = base.get("session_id") or ""
+    entry_id = record.get("id")
+    timestamp = parse_timestamp(message.get("timestamp")) or base.get("timestamp")
+    for idx, result in enumerate(details.get("results") or []):
+        if not isinstance(result, dict):
+            continue
+        progress = result.get("progressSummary") if isinstance(result.get("progressSummary"), dict) else {}
+        duration_ms = progress.get("durationMs") if isinstance(progress, dict) else None
+        task = str(result.get("task") or "")
+        exit_code = result.get("exitCode")
+        subagent = result.get("agent") or "subagent"
+        extra = {
+            **base_extra,
+            "parent_tool_call_id": message.get("toolCallId"),
+            "subagent": subagent,
+            "mode": details.get("mode"),
+            "task": redact_text(task) if include_text else value_summary(task),
+            "skills": result.get("skills") if isinstance(result.get("skills"), list) else [],
+            "session_file": result.get("sessionFile"),
+            "artifact_paths": result.get("artifactPaths") if isinstance(result.get("artifactPaths"), dict) else {},
+            "progress_summary": scrub(progress) if include_text else value_summary(progress),
+        }
+        traces.append(
+            NormalizedTrace(
+                **{**base, "timestamp": timestamp},
+                kind="subagent_run",
+                source_event_id=f"pi:{session_id}:{entry_id}:subagent:{idx}:{subagent}",
+                turn_id=str(entry_id) if entry_id else None,
+                model=result.get("model"),
+                tool_name=str(subagent),
+                tool_kind="pi_subagent",
+                duration_ms=float(duration_ms) if isinstance(duration_ms, (int, float)) else None,
+                success=(exit_code == 0) if isinstance(exit_code, int) else None,
+                exit_code=exit_code if isinstance(exit_code, int) else None,
+                tags={**base_tags, "role": "toolResult", "subagent": subagent, "mode": details.get("mode")},
+                extra=extra,
+            )
+        )
+    return traces
 
 
 def codex_log_to_trace(row: sqlite3.Row, git: GitMetadataCache, include_text: bool = False) -> NormalizedTrace:

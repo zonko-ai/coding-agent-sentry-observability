@@ -8,7 +8,7 @@ import sys
 import time
 from pathlib import Path
 
-LABEL = "com.sahan.agent-vm-observability"
+LABEL = "io.github.coding-agents-sentry-observability.agent-vm"
 
 
 def plist_path() -> Path:

@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Install coding-agents-sentry-observability on this machine.
+Install coding-agents-sentry-observability on a local workstation.
 
 Usage:
   ./scripts/install.sh [options]
@@ -144,6 +144,7 @@ AGENT_VM_MEMORY_DB=~/.agent-vm-observability/memory.db
 AGENT_VM_STATE=~/.local/state/agent-vm-observability/state.json
 
 # Source locations. Uncomment to override auto-detected defaults.
+# AGENT_VM_PI_GLOB=$HOME/.pi/agent/sessions/**/*.jsonl
 # AGENT_VM_CODEX_LOGS_DB=$HOME/.codex/logs_2.sqlite
 # AGENT_VM_CODEX_STATE_DB=$HOME/.codex/state_5.sqlite
 # AGENT_VM_CLAUDE_GLOB=$HOME/.claude/projects/**/*.jsonl

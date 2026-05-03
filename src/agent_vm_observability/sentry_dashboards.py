@@ -13,7 +13,7 @@ from .config import RuntimeConfig
 def dashboard_specs() -> list[dict[str, Any]]:
     return [
         {
-            "title": "Agent VM Usage Overview",
+            "title": "Coding Agents Usage Overview",
             "widgets": [
                 _big_number("Estimated cost (24h)", "sum(measurements.cost_usd)", "is_transaction:true"),
                 _big_number("Total tokens (24h)", "sum(measurements.total_tokens)", "is_transaction:true"),
@@ -36,7 +36,7 @@ def dashboard_specs() -> list[dict[str, Any]]:
             ],
         },
         {
-            "title": "Agent VM Token And Tool Health",
+            "title": "Coding Agents Token And Tool Health",
             "widgets": [
                 _table(
                     "Largest token traces",
@@ -54,7 +54,12 @@ def dashboard_specs() -> list[dict[str, Any]]:
                     "is_transaction:true tool_name:*",
                 ),
                 _table(
-                    "Claude usage",
+                    "Pi usage",
+                    ["count()", "sum(measurements.total_tokens)", "sum(measurements.cost_usd)", "transaction"],
+                    "is_transaction:true agent:pi",
+                ),
+                _table(
+                    "Claude Code usage",
                     ["count()", "sum(measurements.total_tokens)", "sum(measurements.cost_usd)", "transaction"],
                     "is_transaction:true agent:claude-code",
                 ),
@@ -66,7 +71,7 @@ def dashboard_specs() -> list[dict[str, Any]]:
             ],
         },
         {
-            "title": "Agent VM Failures And Sessions",
+            "title": "Coding Agents Failures And Sessions",
             "widgets": [
                 _table(
                     "Recent sessions",
@@ -86,7 +91,7 @@ def dashboard_specs() -> list[dict[str, Any]]:
                 _table(
                     "Error-level events",
                     ["title", "count()", "level"],
-                    "agent:codex OR agent:claude-code",
+                    "agent:pi OR agent:codex OR agent:claude-code",
                     dataset="error-events",
                 ),
             ],

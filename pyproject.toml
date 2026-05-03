@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "coding-agents-sentry-observability"
 version = "0.1.0"
-description = "Local observability and shared memory for Codex and Claude Code usage on one VM."
+description = "Local observability and shared memory for Pi, Claude Code, and Codex usage."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"

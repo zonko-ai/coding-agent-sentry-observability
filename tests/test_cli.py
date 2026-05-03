@@ -9,12 +9,14 @@ from agent_vm_observability.memory import MemoryStore
 def test_self_test_dry_run_smoke(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("AGENT_VM_MEMORY_DB", str(tmp_path / "memory.db"))
     monkeypatch.setenv("AGENT_VM_STATE", str(tmp_path / "state.json"))
+    monkeypatch.setenv("AGENT_VM_PI_GLOB", str(tmp_path / "missing-pi.jsonl"))
     assert main(["self-test", "--dry-run"]) == 0
 
 
 def test_status_smoke(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("AGENT_VM_MEMORY_DB", str(tmp_path / "memory.db"))
     monkeypatch.setenv("AGENT_VM_STATE", str(tmp_path / "state.json"))
+    monkeypatch.setenv("AGENT_VM_PI_GLOB", str(tmp_path / "missing-pi.jsonl"))
     assert main(["status"]) == 0
 
 
@@ -49,6 +51,7 @@ def test_bridge_records_local_memory_without_sentry(monkeypatch, tmp_path) -> No
     monkeypatch.setenv("AGENT_VM_CODEX_LOGS_DB", str(tmp_path / "missing-logs.sqlite"))
     monkeypatch.setenv("AGENT_VM_CODEX_STATE_DB", str(tmp_path / "missing-state.sqlite"))
     monkeypatch.setenv("AGENT_VM_CLAUDE_GLOB", str(claude_jsonl))
+    monkeypatch.setenv("AGENT_VM_PI_GLOB", str(tmp_path / "missing-pi.jsonl"))
 
     assert main(["bridge", "--once", "--backfill-minutes", "60"]) == 0
     assert MemoryStore(tmp_path / "memory.db").counts()["events"] == 1

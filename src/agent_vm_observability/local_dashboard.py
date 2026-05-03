@@ -291,7 +291,7 @@ def render_dashboard(store: MemoryStore) -> str:
 <body>
   <header>
     <h1>coding-agents-sentry-observability</h1>
-    <p>Shared observability and memory for Codex and Claude Code on this VM. Window: last {usage['window_hours']} hours. Claude mem imports tracked: {usage['import_status']['claude_mem_sources']} source rows.</p>
+    <p>Local observability and memory for Pi, Claude Code, and Codex. Window: last {usage['window_hours']} hours.</p>
   </header>
   <main>
     <section class="metric-grid">{metric_cards}</section>

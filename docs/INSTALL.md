@@ -1,13 +1,13 @@
 # Install coding-agents-sentry-observability
 
-`coding-agents-sentry-observability` collects local coding-agent activity into one local SQLite memory database and, optionally, exports normalized traces to Sentry.
+`coding-agents-sentry-observability` collects local coding-agent activity into one SQLite database and, optionally, exports normalized traces to Sentry.
 
 Supported sources today:
 
+- Pi session JSONL records from `~/.pi/agent/sessions/**/*.jsonl`
 - Claude Code JSONL records from `~/.claude/projects/**/*.jsonl`
 - Codex OTel logs from `~/.codex/logs_2.sqlite`
 - Codex thread metadata from `~/.codex/state_5.sqlite`
-- Optional import from `~/.claude-mem/claude-mem.db`
 
 Sentry is optional. If `SENTRY_DSN` is unset, the bridge runs in local-only mode and still records to `~/.agent-vm-observability/memory.db`.
 
@@ -112,9 +112,8 @@ agent-vm status
 agent-vm bridge --once --backfill-minutes 60
 agent-vm bridge --loop
 agent-vm dashboard --port 8765
-agent-vm memory import-claude-mem
 agent-vm memory search "dashboard decision"
-agent-vm memory context --cwd /path/to/repo --agent codex
+agent-vm memory context --cwd /path/to/repo --agent pi
 agent-vm memory summarize-session <session-id>
 agent-vm memory rebuild-fts
 ```

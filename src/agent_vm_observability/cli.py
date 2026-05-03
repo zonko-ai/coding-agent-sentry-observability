@@ -23,7 +23,7 @@ from .timeutil import utc_now
 
 def main(argv: list[str] | None = None) -> int:
     load_env_files()
-    parser = argparse.ArgumentParser(description="Local observability and memory for agent usage on this VM.")
+    parser = argparse.ArgumentParser(description="Local observability and memory for coding-agent usage.")
     sub = parser.add_subparsers(dest="command")
 
     bridge = sub.add_parser("bridge", help="Run the Sentry/memory bridge.")
@@ -55,14 +55,12 @@ def main(argv: list[str] | None = None) -> int:
 
     memory = sub.add_parser("memory", help="Shared memory commands.")
     memory_sub = memory.add_subparsers(dest="memory_command")
-    import_cm = memory_sub.add_parser("import-claude-mem")
-    import_cm.add_argument("--source", type=Path)
     search = memory_sub.add_parser("search")
     search.add_argument("query")
     search.add_argument("--limit", type=int, default=10)
     context = memory_sub.add_parser("context")
     context.add_argument("--cwd", required=True)
-    context.add_argument("--agent", choices=["codex", "claude-code"], required=True)
+    context.add_argument("--agent", choices=["codex", "claude-code", "pi"], required=True)
     context.add_argument("--limit", type=int, default=12)
     summarize = memory_sub.add_parser("summarize-session")
     summarize.add_argument("session_id")
@@ -174,6 +172,7 @@ def cmd_status(config: Any) -> int:
         "codex_logs_last_id": state.get("codex_logs_last_id"),
         "codex_threads_last_updated_ms": state.get("codex_threads_last_updated_ms"),
         "claude_files_tracked": len(state.get("claude_files", {})),
+        "pi_files_tracked": len(state.get("pi_files", {})),
         "memory_counts": counts,
         "usage_24h": usage_24h,
         "launchd": launchd_status().splitlines()[:8],
@@ -193,7 +192,7 @@ def cmd_self_test(config: Any, dry_run: bool) -> int:
     marker = f"agent-vm-self-test-{int(time.time())}-{os.getpid()}"
     from .model import NormalizedTrace
 
-    for agent in ("claude-code", "codex"):
+    for agent in ("pi", "claude-code", "codex"):
         trace = NormalizedTrace(
             agent=agent,
             kind="self_test",
@@ -232,11 +231,6 @@ def cmd_backfill(config: Any, minutes: int, dry_run: bool, update_state: bool) -
 
 def cmd_memory(config: Any, args: Any) -> int:
     store = MemoryStore(config.memory_db_path)
-    if args.memory_command == "import-claude-mem":
-        source = args.source or config.claude_mem_db
-        result = store.import_claude_mem(source)
-        print(json.dumps(result.__dict__, indent=2))
-        return 0
     if args.memory_command == "search":
         rows = store.search(args.query, limit=args.limit)
         print(json.dumps(rows, indent=2, default=str))
