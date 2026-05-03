@@ -105,17 +105,29 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_backfill(config, minutes=args.minutes, dry_run=args.dry_run, update_state=args.update_state)
 
     if args.command == "install-launchd":
-        path = install_launchd(load=not args.no_load)
+        try:
+            path = install_launchd(load=not args.no_load)
+        except RuntimeError as exc:
+            print(str(exc))
+            return 2
         print(path)
         return 0
 
     if args.command == "start-launchd":
-        path = start_launchd()
+        try:
+            path = start_launchd()
+        except RuntimeError as exc:
+            print(str(exc))
+            return 2
         print(path)
         return 0
 
     if args.command == "stop-launchd":
-        stop_launchd()
+        try:
+            stop_launchd()
+        except RuntimeError as exc:
+            print(str(exc))
+            return 2
         print("stopped")
         return 0
 
@@ -171,9 +183,12 @@ def cmd_status(config: Any) -> int:
 
 
 def cmd_self_test(config: Any, dry_run: bool) -> int:
+    if not dry_run and not config.sentry_dsn:
+        log("SENTRY_DSN is not configured; cannot send self-test")
+        return 2
     sink = SentrySink(config, dry_run=dry_run)
     if not sink.configure():
-        log("SENTRY_DSN is not configured; cannot send self-test")
+        log("Sentry sink could not be configured")
         return 2
     marker = f"agent-vm-self-test-{int(time.time())}-{os.getpid()}"
     from .model import NormalizedTrace
@@ -185,7 +200,7 @@ def cmd_self_test(config: Any, dry_run: bool) -> int:
             timestamp=utc_now(),
             source_event_id=f"{agent}:{marker}",
             session_id=marker,
-            project="coding-agents-mem",
+            project="coding-agents-sentry-observability",
             cwd=str(Path.cwd()),
             success=True,
             measurements={"self_test": 1},

@@ -1,6 +1,6 @@
-# coding-agents-mem
+# coding-agents-sentry-observability
 
-`coding-agents-mem` packages the local Sentry bridge and central memory store for agent usage on this machine. It watches Claude Code and Codex local telemetry, exports normalized traces to Sentry, and keeps a shared SQLite memory database that can import the existing `claude-mem` database without mutating it.
+`coding-agents-sentry-observability` packages the local Sentry bridge and central memory store for agent usage on this machine. It watches Claude Code and Codex local telemetry, exports normalized traces to Sentry, and keeps a shared SQLite memory database that can import the existing `claude-mem` database without mutating it.
 
 ## What It Tracks
 
@@ -9,9 +9,26 @@
 - Codex thread metadata from `~/.codex/state_5.sqlite`
 - Normalized sessions, turns, events, tool calls, observations, summaries, and memories in `~/.agent-vm-observability/memory.db`
 
-Raw message text is disabled by default. The bridge stores lengths, hashes, metadata, model/tool/timing fields, and token/cache counters. Set `AGENT_SENTRY_INCLUDE_TEXT=1` only if raw redacted text should be exported.
+Raw message text is disabled by default. The bridge stores lengths, hashes, metadata, model/tool/timing fields, and token/cache counters. Set `AGENT_VM_INCLUDE_TEXT=1` only if raw redacted text should be exported or stored locally.
 
 ## Install
+
+For local-only tracking and dashboard setup from a clone:
+
+```bash
+./scripts/install.sh
+source .venv/bin/activate
+agent-vm bridge --once --backfill-minutes 30
+agent-vm dashboard --port 8765
+```
+
+Sentry export is optional. Without `SENTRY_DSN`, the bridge still records local memory to `~/.agent-vm-observability/memory.db`. To install and start the macOS background service:
+
+```bash
+./scripts/install.sh --service
+```
+
+For development:
 
 ```bash
 python3 -m venv .venv
@@ -19,9 +36,11 @@ python3 -m venv .venv
 pip install -e ".[dev]"
 ```
 
+See `docs/INSTALL.md` for installer flags, Sentry dashboard setup, and privacy notes.
+
 Existing Sentry DSN config remains compatible at `~/.config/agent-sentry/env`. New config is read from `~/.config/agent-vm-observability/env` as an override. Do not commit either file.
 
-The repository name is `coding-agents-mem`. Internal module names, CLI commands, and runtime state paths remain `agent-vm*` for compatibility with the existing service and stored data.
+The repository name is `coding-agents-sentry-observability`. Internal module names, CLI commands, and runtime state paths remain `agent-vm*` for compatibility with the existing service and stored data.
 
 ## CLI
 

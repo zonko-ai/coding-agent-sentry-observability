@@ -160,6 +160,8 @@ class SentryDashboardClient:
         self.base_url = base_url.rstrip("/")
 
     def apply(self, dry_run: bool = False) -> list[DashboardApplyResult]:
+        if not dry_run and not self.config.sentry_org:
+            raise RuntimeError("SENTRY_ORG is required to apply dashboards")
         if not dry_run and not self.token:
             raise RuntimeError("SENTRY_AUTH_TOKEN is required to apply dashboards")
         existing = self._list_dashboards() if not dry_run else []

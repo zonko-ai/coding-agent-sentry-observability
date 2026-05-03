@@ -1,3 +1,3 @@
-"""coding-agents-mem package."""
+"""coding-agents-sentry-observability package."""
 
 VERSION = "0.1.0"

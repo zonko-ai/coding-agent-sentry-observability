@@ -1,8 +1,20 @@
+import json
 import sqlite3
 from pathlib import Path
 
-from agent_vm_observability.ingest import claude_record_to_traces, codex_log_to_trace, parse_codex_kv
+from agent_vm_observability.config import RuntimeConfig
+from agent_vm_observability.ingest import AgentIngestor, claude_record_to_traces, codex_log_to_trace, parse_codex_kv
 from agent_vm_observability.model import GitMetadataCache
+
+
+class CapturingSink:
+    dry_run = False
+
+    def __init__(self) -> None:
+        self.traces = []
+
+    def capture(self, trace) -> None:
+        self.traces.append(trace)
 
 
 def test_parse_codex_kv_handles_quoted_values() -> None:
@@ -45,6 +57,8 @@ def test_codex_log_to_trace_normalizes_fields(tmp_path: Path) -> None:
     assert trace.token_usage["output_tokens"] == 5
     assert trace.measurements["cost_usd"] == 0.000125
     assert trace.measurements["total_tokens"] == 115
+    assert trace.extra["body"]["value_type"] == "str"
+    assert "codex.websocket_event" not in json.dumps(trace.extra["body"])
 
 
 def test_claude_record_to_traces_extracts_assistant_and_tool() -> None:
@@ -76,3 +90,71 @@ def test_claude_record_to_traces_extracts_assistant_and_tool() -> None:
     assert traces[0].token_usage["cache_creation_1h_input_tokens"] == 6
     assert traces[0].measurements["cost_usd"] == 0.000175
     assert traces[1].tool_name == "Read"
+
+
+def test_claude_tool_result_omits_raw_text_by_default() -> None:
+    record = {
+        "type": "user",
+        "sessionId": "session-1",
+        "uuid": "uuid-2",
+        "cwd": "/Users/example/3_zonko_projects/example",
+        "timestamp": "2026-04-20T11:00:01Z",
+        "message": {"role": "user", "content": [{"type": "tool_result", "content": "ok"}]},
+        "toolUseResult": {"stdout": "PRIVATE_DOC_CONTENT_SHOULD_NOT_LEAVE", "exit_code": 0},
+    }
+    trace = claude_record_to_traces(record, GitMetadataCache(), include_text=False)[0]
+    payload = json.dumps(trace.extra, sort_keys=True)
+    assert "PRIVATE_DOC_CONTENT_SHOULD_NOT_LEAVE" not in payload
+    assert trace.extra["tool_use_result"]["value_type"] == "dict"
+    assert trace.extra["tool_use_result"]["json_hash"]
+
+
+def test_codex_threads_paginates_duplicate_updated_at(tmp_path: Path) -> None:
+    codex_state = tmp_path / "state.sqlite"
+    conn = sqlite3.connect(codex_state)
+    conn.execute(
+        """
+        create table threads(id text, updated_at_ms integer, created_at_ms integer, source text,
+        model_provider text, cwd text, title text, tokens_used integer, first_user_message text,
+        model text, reasoning_effort text, cli_version text, git_branch text, git_sha text,
+        git_origin_url text)
+        """
+    )
+    for thread_id in ("t0", "t1", "t2"):
+        conn.execute(
+            "insert into threads values (?, 1000, 1, 'cli', 'openai', ?, '', 0, '', 'gpt-5.4', '', '1', '', '', '')",
+            (thread_id, str(tmp_path)),
+        )
+    conn.commit()
+    conn.close()
+
+    config = RuntimeConfig(
+        config_path=tmp_path / "env",
+        legacy_config_path=tmp_path / "legacy-env",
+        state_path=tmp_path / "bridge-state.json",
+        memory_db_path=tmp_path / "memory.db",
+        codex_logs_db=tmp_path / "missing-logs.sqlite",
+        codex_state_db=codex_state,
+        claude_projects_glob=str(tmp_path / "missing-claude.jsonl"),
+        claude_mem_db=tmp_path / "claude-mem.db",
+        sentry_dsn=None,
+        sentry_org="org",
+        sentry_project="project",
+        sentry_project_id=None,
+        include_text=False,
+        traces_sample_rate=1.0,
+        max_batch=2,
+        poll_seconds=1,
+        record_memory=False,
+    )
+    sink = CapturingSink()
+    ingestor = AgentIngestor(config, sink, None)
+    state = {"codex_threads_last_updated_ms": 0}
+
+    assert ingestor.process_codex_threads(state, max_batch=2) == 2
+    assert [trace.session_id for trace in sink.traces] == ["t0", "t1"]
+    assert state["codex_threads_last_updated_ms"] == 1000
+    assert state["codex_threads_last_id"] == "t1"
+
+    assert ingestor.process_codex_threads(state, max_batch=2) == 1
+    assert [trace.session_id for trace in sink.traces] == ["t0", "t1", "t2"]

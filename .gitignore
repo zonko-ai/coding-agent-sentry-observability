@@ -14,4 +14,5 @@ build/
 *.db-shm
 *.db-wal
 local/
+.pi/
 

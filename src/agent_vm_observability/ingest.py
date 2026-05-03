@@ -135,6 +135,28 @@ def content_summary(content: Any, include_text: bool) -> dict[str, Any]:
     return summary
 
 
+def value_summary(value: Any) -> dict[str, Any]:
+    """Summarize a value without retaining raw user/tool text."""
+    summary: dict[str, Any] = {"value_type": type(value).__name__}
+    if isinstance(value, str):
+        summary.update({"text_len": len(value), "text_hash": short_hash(value)})
+        return summary
+    if isinstance(value, bytes):
+        text = value.decode("utf-8", errors="replace")
+        summary.update({"text_len": len(text), "text_hash": short_hash(text)})
+        return summary
+    if isinstance(value, list):
+        summary["items"] = len(value)
+    elif isinstance(value, dict):
+        summary["keys"] = sorted(str(key) for key in value.keys())[:100]
+    try:
+        payload = json.dumps(value, sort_keys=True, default=str)
+    except TypeError:
+        payload = str(value)
+    summary.update({"json_len": len(payload), "json_hash": short_hash(payload)})
+    return summary
+
+
 class AgentIngestor:
     def __init__(self, config: RuntimeConfig, sink: SentrySink, memory: MemoryStore | None = None) -> None:
         self.config = config
@@ -168,8 +190,11 @@ class AgentIngestor:
                     if cutoff_ms:
                         state["codex_threads_last_updated_ms"] = cutoff_ms
                     else:
-                        row = conn.execute("select coalesce(max(updated_at_ms), 0) as max_updated from threads").fetchone()
-                        state["codex_threads_last_updated_ms"] = int(row["max_updated"] or 0)
+                        row = conn.execute(
+                            "select updated_at_ms, id from threads order by updated_at_ms desc, id desc limit 1"
+                        ).fetchone()
+                        state["codex_threads_last_updated_ms"] = int(row["updated_at_ms"] or 0) if row else 0
+                        state["codex_threads_last_id"] = str(row["id"] or "") if row else ""
                     conn.close()
             except Exception as exc:
                 log(f"codex thread initialization failed: {exc}")
@@ -220,7 +245,7 @@ class AgentIngestor:
 
         count = 0
         for row in rows:
-            trace = codex_log_to_trace(row, self.git)
+            trace = codex_log_to_trace(row, self.git, self.config.include_text)
             self.emit(trace)
             state["codex_logs_last_id"] = int(row["id"])
             count += 1
@@ -231,16 +256,19 @@ class AgentIngestor:
         if not conn:
             return 0
         last_updated = int(state.get("codex_threads_last_updated_ms", 0) or 0)
+        last_id = str(state.get("codex_threads_last_id") or "")
+        if last_updated and "codex_threads_last_id" not in state:
+            last_id = "\uffff"
         rows = conn.execute(
             """
             select id, updated_at_ms, created_at_ms, source, model_provider, cwd, title, tokens_used,
                    first_user_message, model, reasoning_effort, cli_version, git_branch, git_sha, git_origin_url
             from threads
-            where updated_at_ms > ?
-            order by updated_at_ms asc
+            where updated_at_ms > ? or (updated_at_ms = ? and id > ?)
+            order by updated_at_ms asc, id asc
             limit ?
             """,
-            (last_updated, max_batch),
+            (last_updated, last_updated, last_id, max_batch),
         ).fetchall()
         conn.close()
 
@@ -248,10 +276,8 @@ class AgentIngestor:
         for row in rows:
             trace = codex_thread_to_trace(row, self.git, self.config.include_text)
             self.emit(trace)
-            state["codex_threads_last_updated_ms"] = max(
-                int(row["updated_at_ms"] or 0),
-                int(state.get("codex_threads_last_updated_ms", 0) or 0),
-            )
+            state["codex_threads_last_updated_ms"] = int(row["updated_at_ms"] or 0)
+            state["codex_threads_last_id"] = str(row["id"] or "")
             count += 1
         return count
 
@@ -302,7 +328,7 @@ class AgentIngestor:
         return processed
 
 
-def codex_log_to_trace(row: sqlite3.Row, git: GitMetadataCache) -> NormalizedTrace:
+def codex_log_to_trace(row: sqlite3.Row, git: GitMetadataCache, include_text: bool = False) -> NormalizedTrace:
     body = row["feedback_log_body"] or ""
     parsed = parse_codex_kv(body)
     kind = parsed.get("event.name") or parsed.get("otel.name") or "otel_log"
@@ -374,8 +400,8 @@ def codex_log_to_trace(row: sqlite3.Row, git: GitMetadataCache) -> NormalizedTra
             "module_path": row["module_path"],
             "file": row["file"],
             "line": row["line"],
-            "codex_otel": parsed,
-            "body": redact_text(body),
+            "codex_otel": scrub(parsed) if include_text else value_summary(parsed),
+            "body": redact_text(body) if include_text else value_summary(body),
         },
     )
     apply_cost_estimate(trace)
@@ -385,10 +411,12 @@ def codex_log_to_trace(row: sqlite3.Row, git: GitMetadataCache) -> NormalizedTra
 def codex_thread_to_trace(row: sqlite3.Row, git: GitMetadataCache, include_text: bool) -> NormalizedTrace:
     cwd = row["cwd"]
     first_user_message = row["first_user_message"] or ""
+    title = row["title"] or ""
     git_meta = git.for_cwd(cwd)
     extra: dict[str, Any] = {
         "thread_id": row["id"],
-        "title": row["title"],
+        "title_len": len(title),
+        "title_hash": short_hash(title),
         "first_user_message_len": len(first_user_message),
         "first_user_message_hash": short_hash(first_user_message),
         "created_at_ms": row["created_at_ms"],
@@ -396,6 +424,7 @@ def codex_thread_to_trace(row: sqlite3.Row, git: GitMetadataCache, include_text:
         "git_origin_url": row["git_origin_url"],
     }
     if include_text:
+        extra["title"] = redact_text(title)
         extra["first_user_message"] = redact_text(first_user_message)
     trace = NormalizedTrace(
         agent="codex",
@@ -495,6 +524,7 @@ def claude_record_to_traces(record: dict[str, Any], git: GitMetadataCache, inclu
                     )
                 )
         elif record_type == "user" and record.get("toolUseResult"):
+            tool_use_result = record.get("toolUseResult")
             append_trace(
                 NormalizedTrace(
                     **base,
@@ -503,7 +533,10 @@ def claude_record_to_traces(record: dict[str, Any], git: GitMetadataCache, inclu
                     source_event_id=f"claude:{uuid}:tool-result",
                     model=model,
                     tags=tags,
-                    extra={**extra, "tool_use_result": scrub(record.get("toolUseResult"))},
+                    extra={
+                        **extra,
+                        "tool_use_result": scrub(tool_use_result) if include_text else value_summary(tool_use_result),
+                    },
                     token_usage=token_usage,
                 )
             )
@@ -592,13 +625,17 @@ def run_bridge_loop(
         state = empty_state()
 
     running = True
+    local_only_logged = False
     while running:
         if not sink.configure():
-            log("SENTRY_DSN is not configured; waiting.")
+            log("Sentry sink could not be configured; waiting.")
             if once:
                 return 2
             time.sleep(max(config.poll_seconds, 30))
             continue
+        if not config.sentry_dsn and not sink.dry_run and not local_only_logged:
+            log("SENTRY_DSN is not configured; running local-only memory capture.")
+            local_only_logged = True
         if not state.get("initialized_at"):
             ingestor.initialize_state(state, backfill_since=backfill_since)
             save_state(state)

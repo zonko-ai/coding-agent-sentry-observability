@@ -28,7 +28,7 @@ def run_dashboard(memory_db: Path, host: str, port: int) -> None:
             return
 
     server = ThreadingHTTPServer((host, port), Handler)
-    print(f"coding-agents-mem dashboard: http://{host}:{port}", flush=True)
+    print(f"coding-agents-sentry-observability dashboard: http://{host}:{port}", flush=True)
     server.serve_forever()
 
 
@@ -158,7 +158,7 @@ def render_dashboard(store: MemoryStore) -> str:
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>coding-agents-mem</title>
+  <title>coding-agents-sentry-observability</title>
   <style>
     :root {{
       color-scheme: dark;
@@ -290,7 +290,7 @@ def render_dashboard(store: MemoryStore) -> str:
 </head>
 <body>
   <header>
-    <h1>coding-agents-mem</h1>
+    <h1>coding-agents-sentry-observability</h1>
     <p>Shared observability and memory for Codex and Claude Code on this VM. Window: last {usage['window_hours']} hours. Claude mem imports tracked: {usage['import_status']['claude_mem_sources']} source rows.</p>
   </header>
   <main>

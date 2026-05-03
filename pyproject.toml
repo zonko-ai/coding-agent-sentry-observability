@@ -3,10 +3,11 @@ requires = ["hatchling>=1.26"]
 build-backend = "hatchling.build"
 
 [project]
-name = "coding-agents-mem"
+name = "coding-agents-sentry-observability"
 version = "0.1.0"
 description = "Local observability and shared memory for Codex and Claude Code usage on one VM."
 readme = "README.md"
+license = "MIT"
 requires-python = ">=3.11"
 dependencies = [
   "sentry-sdk>=2.58.0",

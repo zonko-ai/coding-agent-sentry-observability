@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import plistlib
+import shutil
 import subprocess
 import sys
 import time
@@ -28,6 +29,7 @@ def plist_payload() -> dict[str, object]:
 
 
 def install_launchd(load: bool = True) -> Path:
+    _require_launchd()
     path = plist_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     (Path.home() / "Library/Logs/agent-vm-observability").mkdir(parents=True, exist_ok=True)
@@ -39,6 +41,7 @@ def install_launchd(load: bool = True) -> Path:
 
 
 def start_launchd() -> Path:
+    _require_launchd()
     path = plist_path()
     if not path.exists():
         install_launchd(load=False)
@@ -53,11 +56,23 @@ def start_launchd() -> Path:
 
 
 def stop_launchd() -> None:
+    _require_launchd()
     domain = f"gui/{os.getuid()}"
     subprocess.run(["launchctl", "bootout", f"{domain}/{LABEL}"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def launchd_status() -> str:
+    if not _launchd_available():
+        return "launchd is only available on macOS"
     domain = f"gui/{os.getuid()}"
     result = subprocess.run(["launchctl", "print", f"{domain}/{LABEL}"], capture_output=True, text=True)
     return result.stdout if result.returncode == 0 else "launchd service is not loaded"
+
+
+def _launchd_available() -> bool:
+    return sys.platform == "darwin" and shutil.which("launchctl") is not None
+
+
+def _require_launchd() -> None:
+    if not _launchd_available():
+        raise RuntimeError("launchd service management is only available on macOS")

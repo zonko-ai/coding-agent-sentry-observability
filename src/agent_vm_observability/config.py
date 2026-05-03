@@ -35,9 +35,12 @@ def _parse_env_line(line: str) -> tuple[str, str] | None:
 
 def load_env_files() -> None:
     """Load legacy and package config files without executing shell code."""
-    for path in (LEGACY_CONFIG_PATH, CONFIG_PATH):
-        if not path.exists():
+    seen: set[Path] = set()
+    for env_name, default_path in (("AGENT_SENTRY_CONFIG", LEGACY_CONFIG_PATH), ("AGENT_VM_CONFIG", CONFIG_PATH)):
+        path = env_path(env_name, default_path)
+        if path in seen or not path.exists():
             continue
+        seen.add(path)
         for line in path.read_text().splitlines():
             parsed = _parse_env_line(line)
             if parsed:
@@ -99,10 +102,10 @@ def get_config() -> RuntimeConfig:
         claude_projects_glob=os.environ.get("AGENT_VM_CLAUDE_GLOB") or os.environ.get("AGENT_SENTRY_CLAUDE_GLOB") or CLAUDE_PROJECTS_GLOB,
         claude_mem_db=env_path("AGENT_VM_CLAUDE_MEM_DB", CLAUDE_MEM_DB),
         sentry_dsn=os.environ.get("SENTRY_DSN") or os.environ.get("AGENT_SENTRY_DSN"),
-        sentry_org=os.environ.get("SENTRY_ORG", "example-org"),
+        sentry_org=os.environ.get("SENTRY_ORG", ""),
         sentry_project=os.environ.get("SENTRY_PROJECT", "agent-vm-usage"),
         sentry_project_id=os.environ.get("SENTRY_PROJECT_ID"),
-        include_text=env_bool("AGENT_SENTRY_INCLUDE_TEXT", False),
+        include_text=env_bool("AGENT_VM_INCLUDE_TEXT", env_bool("AGENT_SENTRY_INCLUDE_TEXT", False)),
         traces_sample_rate=float(os.environ.get("SENTRY_TRACES_SAMPLE_RATE", "1.0")),
         max_batch=env_int("AGENT_VM_MAX_BATCH", env_int("AGENT_SENTRY_MAX_BATCH", 250)),
         poll_seconds=env_int("AGENT_VM_POLL_SECONDS", env_int("AGENT_SENTRY_POLL_SECONDS", 15)),

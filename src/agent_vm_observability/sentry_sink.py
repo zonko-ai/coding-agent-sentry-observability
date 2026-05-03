@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Any
 
 from . import VERSION
@@ -34,13 +35,13 @@ class SentrySink:
             return True
         if not self.config.sentry_dsn:
             self.enabled = False
-            return False
+            return True
         import sentry_sdk
 
         sentry_sdk.init(
             dsn=self.config.sentry_dsn,
             environment=os.environ.get("SENTRY_ENVIRONMENT", "local-vm"),
-            release=f"coding-agents-mem@{VERSION}",
+            release=f"coding-agents-sentry-observability@{VERSION}",
             traces_sample_rate=self.config.traces_sample_rate,
             send_default_pii=False,
             before_send=lambda event, hint: scrub(event),
@@ -85,7 +86,10 @@ class SentrySink:
             event["timestamp"] = ts
         self._sentry_sdk.capture_event(event)
 
-        transaction = self._sentry_sdk.start_transaction(name=trace.title, op=_transaction_op(trace))
+        transaction_kwargs: dict[str, Any] = {}
+        if trace.timestamp:
+            transaction_kwargs["start_timestamp"] = trace.timestamp
+        transaction = self._sentry_sdk.start_transaction(name=trace.title, op=_transaction_op(trace), **transaction_kwargs)
         for key, value in tags.items():
             transaction.set_tag(key, value)
         for key, value in measurements.items():
@@ -96,7 +100,12 @@ class SentrySink:
         transaction.set_data("agent_measurements", measurements)
         transaction.set_data("event_timestamp", ts)
         transaction.set_data("source_event_id", trace.stable_event_id())
-        transaction.finish()
+        end_timestamp = None
+        if trace.timestamp:
+            end_timestamp = trace.timestamp
+            if trace.duration_ms is not None:
+                end_timestamp = end_timestamp + timedelta(milliseconds=trace.duration_ms)
+        transaction.finish(end_timestamp=end_timestamp)
 
     def capture_exception(self, exc: BaseException) -> None:
         if self.enabled and self._sentry_sdk is not None:
