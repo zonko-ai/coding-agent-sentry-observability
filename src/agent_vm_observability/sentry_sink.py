@@ -19,14 +19,15 @@ class CapturedTrace:
     measurements: dict[str, int | float]
 
 
-USAGE_SCHEMA = "llm_usage_v7"
+USAGE_SCHEMA = "llm_usage_v8"
 USAGE_MEASUREMENT_KEYS = ("input_tokens", "output_tokens", "total_tokens", "cost_usd")
 
 
 class SentrySink:
-    def __init__(self, config: RuntimeConfig, dry_run: bool = False) -> None:
+    def __init__(self, config: RuntimeConfig, dry_run: bool = False, local_only: bool = False) -> None:
         self.config = config
         self.dry_run = dry_run
+        self.local_only = local_only
         self.enabled = False
         self.captured: list[CapturedTrace] = []
         self._sentry_sdk: Any = None
@@ -34,7 +35,7 @@ class SentrySink:
     def configure(self) -> bool:
         if self.enabled and self._sentry_sdk is not None:
             return True
-        if self.dry_run:
+        if self.dry_run or self.local_only:
             self.enabled = False
             return True
         if not self.config.sentry_dsn:
@@ -65,11 +66,9 @@ class SentrySink:
         measurements = trace.all_measurements()
         if _has_usage_measurements(measurements):
             tags["usage_schema"] = USAGE_SCHEMA
-            if trace.kind.startswith("usage_v") or str(trace.tags.get("usage_canonical", "")).lower() == "true":
-                tags["usage_canonical"] = "true"
+            tags["usage_canonical"] = "true"
             usage_rollup = trace.tags.get("usage_rollup")
-            if isinstance(usage_rollup, str) and usage_rollup:
-                tags["usage_rollup"] = safe_tag_value(usage_rollup)
+            tags["usage_rollup"] = safe_tag_value(usage_rollup) if isinstance(usage_rollup, str) and usage_rollup else "event"
             usage_model = trace.model or trace.tags.get("usage_model")
             if isinstance(usage_model, str) and usage_model:
                 tags["usage_model"] = safe_tag_value(usage_model)
@@ -77,6 +76,8 @@ class SentrySink:
             self.captured.append(CapturedTrace(trace.title, tags, measurements))
         if self.dry_run:
             print(f"dry-run capture {trace.title} tags={tags} measurements={measurements}", flush=True)
+            return
+        if self.local_only:
             return
         if not self.enabled or self._sentry_sdk is None:
             return

@@ -66,8 +66,7 @@ def test_dashboard_payload_preserves_chart_layout_and_uses_seven_day_period() ->
     cost = next(widget for widget in payload["widgets"] if widget["title"] == "Estimated Cost")
     assert cost["widgetType"] == "spans"
     event_query = f"is_transaction:true usage_schema:{USAGE_SCHEMA} usage_canonical:true usage_rollup:event span.op:gen_ai.invoke_agent"
-    total_query = f"is_transaction:true usage_schema:{USAGE_SCHEMA} usage_canonical:true usage_rollup:total span.op:gen_ai.invoke_agent"
-    assert cost["queries"][0]["conditions"] == f"{total_query} gen_ai.cost.total_tokens:>0"
+    assert cost["queries"][0]["conditions"] == f"{event_query} gen_ai.cost.total_tokens:>0"
     assert cost["queries"][0]["aggregates"] == ["sum(gen_ai.cost.total_tokens)"]
     duration = next(widget for widget in payload["widgets"] if widget["title"] == "Span Duration")
     assert duration["displayType"] == "line"

@@ -11,11 +11,7 @@ from .config import RuntimeConfig
 from .sentry_sink import USAGE_SCHEMA
 
 
-_USAGE_EVENT_QUERY = f"is_transaction:true usage_schema:{USAGE_SCHEMA} usage_canonical:true usage_rollup:event span.op:gen_ai.invoke_agent"
-_USAGE_TOTAL_QUERY = f"is_transaction:true usage_schema:{USAGE_SCHEMA} usage_canonical:true usage_rollup:total span.op:gen_ai.invoke_agent"
-_USAGE_AGENT_QUERY = f"is_transaction:true usage_schema:{USAGE_SCHEMA} usage_canonical:true usage_rollup:agent span.op:gen_ai.invoke_agent"
-_USAGE_MODEL_QUERY = f"is_transaction:true usage_schema:{USAGE_SCHEMA} usage_canonical:true usage_rollup:model span.op:gen_ai.invoke_agent"
-_USAGE_PROJECT_QUERY = f"is_transaction:true usage_schema:{USAGE_SCHEMA} usage_canonical:true usage_rollup:project span.op:gen_ai.invoke_agent"
+_USAGE_QUERY = f"is_transaction:true usage_schema:{USAGE_SCHEMA} usage_canonical:true usage_rollup:event span.op:gen_ai.invoke_agent"
 
 
 def dashboard_specs() -> list[dict[str, Any]]:
@@ -24,48 +20,48 @@ def dashboard_specs() -> list[dict[str, Any]]:
             "title": "Agent VM Usage Overview",
             "period": "7d",
             "widgets": [
-                _big_number("Active Sessions", "count_unique(session_id)", f"{_USAGE_EVENT_QUERY} session_id:*", layout=_layout(0, 0, 1, 2)),
-                _big_number("LLM Call Count", "count()", _USAGE_EVENT_QUERY, layout=_layout(1, 0, 1, 2)),
+                _big_number("Active Sessions", "count_unique(session_id)", f"{_USAGE_QUERY} session_id:*", layout=_layout(0, 0, 1, 2)),
+                _big_number("LLM Call Count", "count()", _USAGE_QUERY, layout=_layout(1, 0, 1, 2)),
                 _big_number(
                     "Total Tokens",
                     "sum(gen_ai.usage.total_tokens)",
-                    f"{_USAGE_TOTAL_QUERY} gen_ai.usage.total_tokens:>0",
+                    f"{_USAGE_QUERY} gen_ai.usage.total_tokens:>0",
                     layout=_layout(2, 0, 2, 2),
                 ),
                 _big_number(
                     "Estimated Cost",
                     "sum(gen_ai.cost.total_tokens)",
-                    f"{_USAGE_TOTAL_QUERY} gen_ai.cost.total_tokens:>0",
+                    f"{_USAGE_QUERY} gen_ai.cost.total_tokens:>0",
                     layout=_layout(4, 0, 2, 2),
                 ),
                 _line(
                     "Agent Runs",
                     ["count_unique(session_id)"],
-                    f"{_USAGE_EVENT_QUERY} session_id:*",
+                    f"{_USAGE_QUERY} session_id:*",
                     layout=_layout(0, 2, 3, 3),
                 ),
                 _line(
                     "LLM Calls",
                     ["count()"],
-                    _USAGE_EVENT_QUERY,
+                    _USAGE_QUERY,
                     layout=_layout(3, 2, 3, 3),
                 ),
                 _line(
                     "Span Duration",
                     ["avg(span.duration)", "p95(span.duration)"],
-                    _USAGE_EVENT_QUERY,
+                    _USAGE_QUERY,
                     layout=_layout(0, 5, 3, 3),
                 ),
                 _bar(
                     "LLM Calls by Model",
                     ["count()", "usage_model"],
-                    f"{_USAGE_EVENT_QUERY} usage_model:*",
+                    f"{_USAGE_QUERY} usage_model:*",
                     layout=_layout(3, 5, 3, 3),
                 ),
                 _line(
                     "Tokens by Model",
                     ["sum(gen_ai.usage.total_tokens)", "usage_model"],
-                    f"{_USAGE_MODEL_QUERY} gen_ai.usage.total_tokens:>0 usage_model:*",
+                    f"{_USAGE_QUERY} gen_ai.usage.total_tokens:>0 usage_model:*",
                     layout=_layout(0, 8, 3, 3),
                 ),
                 _bar(
@@ -77,19 +73,19 @@ def dashboard_specs() -> list[dict[str, Any]]:
                 _line(
                     "Cost by Agent",
                     ["sum(gen_ai.cost.total_tokens)", "agent"],
-                    f"{_USAGE_AGENT_QUERY} gen_ai.cost.total_tokens:>0",
+                    f"{_USAGE_QUERY} gen_ai.cost.total_tokens:>0",
                     layout=_layout(0, 11, 3, 3),
                 ),
                 _bar(
                     "LLM Calls by Agent",
                     ["count()", "agent"],
-                    f"{_USAGE_EVENT_QUERY} agent:*",
+                    f"{_USAGE_QUERY} agent:*",
                     layout=_layout(3, 11, 3, 3),
                 ),
                 _table(
                     "Usage by Project",
-                    ["sum(gen_ai.usage.total_tokens)", "sum(gen_ai.cost.total_tokens)", "agent_project"],
-                    f"{_USAGE_PROJECT_QUERY} gen_ai.cost.total_tokens:>0 agent_project:*",
+                    ["count()", "sum(gen_ai.usage.total_tokens)", "sum(gen_ai.cost.total_tokens)", "agent_project"],
+                    f"{_USAGE_QUERY} gen_ai.cost.total_tokens:>0 agent_project:*",
                     layout=_layout(0, 14, 6, 3),
                 ),
                 _line(
@@ -102,7 +98,7 @@ def dashboard_specs() -> list[dict[str, Any]]:
                 _table(
                     "High-cost Traces",
                     ["gen_ai.cost.total_tokens", "gen_ai.usage.total_tokens", "span.duration", "transaction", "agent", "agent_project", "usage_model", "timestamp"],
-                    f"{_USAGE_EVENT_QUERY} gen_ai.cost.total_tokens:>0",
+                    f"{_USAGE_QUERY} gen_ai.cost.total_tokens:>0",
                     layout=_layout(0, 20, 6, 4),
                 ),
                 _table(

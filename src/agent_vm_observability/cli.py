@@ -216,7 +216,7 @@ def cmd_backfill(config: Any, minutes: int, dry_run: bool, update_state: bool) -
         store = StateStore(temp_path)
         state = empty_state()
         save = store.save
-    sink = SentrySink(config, dry_run=dry_run)
+    sink = SentrySink(config, dry_run=dry_run, local_only=not dry_run)
     memory_store = MemoryStore(config.memory_db_path)
     result = run_bridge_loop(config, sink, memory_store, state, save, loop=False, once=True, backfill_minutes=minutes)
     if result != 0:

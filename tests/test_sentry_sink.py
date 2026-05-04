@@ -84,7 +84,7 @@ def test_usage_traces_are_tagged_with_usage_schema(tmp_path) -> None:
     assert sink.captured[0].tags["usage_rollup"] == "event"
 
 
-def test_live_usage_traces_are_not_marked_canonical(tmp_path) -> None:
+def test_live_usage_traces_are_marked_as_canonical_events(tmp_path) -> None:
     sink = SentrySink(
         RuntimeConfig(
             config_path=tmp_path / "config.env",
@@ -113,7 +113,8 @@ def test_live_usage_traces_are_not_marked_canonical(tmp_path) -> None:
     sink.capture(trace)
 
     assert sink.captured[0].tags["usage_schema"] == USAGE_SCHEMA
-    assert "usage_canonical" not in sink.captured[0].tags
+    assert sink.captured[0].tags["usage_canonical"] == "true"
+    assert sink.captured[0].tags["usage_rollup"] == "event"
 
 
 def test_cost_or_token_traces_without_model_use_ai_invocation_op() -> None:
