@@ -12,18 +12,29 @@ cd "$ROOT_DIR"
 python -m pip install --upgrade pip
 python -m pip install -e ".[dev]"
 
-mkdir -p "$HOME/.config/agent-vm-observability"
-if [ ! -f "$HOME/.config/agent-vm-observability/env" ]; then
-  cp .env.example "$HOME/.config/agent-vm-observability/env"
-fi
+python - <<'PY'
+from pathlib import Path
+from shutil import copyfile
+
+from agent_vm_observability.config import CONFIG_PATH, LEGACY_CONFIG_PATH, OLD_CONFIG_PATH
+
+CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+if not CONFIG_PATH.exists():
+    for candidate in (OLD_CONFIG_PATH, LEGACY_CONFIG_PATH):
+        if candidate.exists():
+            copyfile(candidate, CONFIG_PATH)
+            break
+    else:
+        copyfile(Path(".env.example"), CONFIG_PATH)
+PY
 
 cat <<'MSG'
-Installed coding-agents-mem.
+Installed coding-agent-sentry-observability.
 
 Next steps:
   . .venv/bin/activate
   agent-vm status
   agent-vm backfill --minutes 30 --dry-run
 
-Edit ~/.config/agent-vm-observability/env to enable Sentry export.
+Edit ~/.config/coding-agent-sentry-observability/env to enable Sentry export.
 MSG

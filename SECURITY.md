@@ -1,6 +1,6 @@
 # Security Policy
 
-`coding-agents-mem` processes local agent telemetry that can contain sensitive prompts, file paths, tool arguments, and secrets. Please report security issues privately before opening a public issue.
+`coding-agent-sentry-observability` processes local agent telemetry that can contain sensitive prompts, file paths, tool arguments, and secrets. Please report security issues privately before opening a public issue.
 
 ## Supported Versions
 

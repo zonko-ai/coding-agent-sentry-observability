@@ -1,6 +1,6 @@
 # Architecture
 
-`coding-agents-mem` is organized around small source adapters that normalize records into a common trace shape.
+`coding-agent-sentry-observability` is organized around small source adapters that normalize records into a common trace shape.
 
 ## Data Flow
 
@@ -47,7 +47,7 @@ Each adapter should:
 
 The bridge keeps watermarks in `AGENT_VM_STATE`, defaulting to:
 
-`~/.local/state/agent-vm-observability/state.json`
+`~/.local/state/coding-agent-sentry-observability/state.json`
 
 Backfills use isolated state unless `--update-state` is provided.
 

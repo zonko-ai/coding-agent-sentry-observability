@@ -1,11 +1,11 @@
 # Configuration
 
-`coding-agents-mem` reads shell-style `KEY=value` files without executing shell code.
+`coding-agent-sentry-observability` reads shell-style `KEY=value` files without executing shell code.
 
 Read order:
 
-1. `~/.config/agent-sentry/env` for backward compatibility
-2. `~/.config/agent-vm-observability/env`
+1. legacy config files from earlier releases, if present
+2. `~/.config/coding-agent-sentry-observability/env`
 3. process environment variables
 
 Later values in the process environment override values loaded from files.
@@ -14,8 +14,8 @@ Later values in the process environment override values loaded from files.
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `AGENT_VM_MEMORY_DB` | `~/.agent-vm-observability/memory.db` | SQLite store for normalized sessions, events, tools, summaries, and memories |
-| `AGENT_VM_STATE` | `~/.local/state/agent-vm-observability/state.json` | Watermarks for incremental ingestion |
+| `AGENT_VM_MEMORY_DB` | `~/.coding-agent-sentry-observability/memory.db` | SQLite store for normalized sessions, events, tools, summaries, and memories |
+| `AGENT_VM_STATE` | `~/.local/state/coding-agent-sentry-observability/state.json` | Watermarks for incremental ingestion |
 | `AGENT_VM_CODEX_LOGS_DB` | `~/.codex/logs_2.sqlite` | Codex OTel log database |
 | `AGENT_VM_CODEX_STATE_DB` | `~/.codex/state_5.sqlite` | Codex thread metadata database |
 | `AGENT_VM_CLAUDE_GLOB` | `~/.claude/projects/**/*.jsonl` | Claude Code session JSONL glob |
@@ -29,7 +29,7 @@ Later values in the process environment override values loaded from files.
 | --- | --- | --- |
 | `SENTRY_DSN` | unset | Enables Sentry export |
 | `SENTRY_ORG` | unset | Required for dashboard provisioning |
-| `SENTRY_PROJECT` | `agent-vm-usage` | Sentry project slug |
+| `SENTRY_PROJECT` | `agent-vm-usage` | Sentry project slug for status/config display |
 | `SENTRY_PROJECT_ID` | unset | Optional numeric project id for dashboards |
 | `SENTRY_AUTH_TOKEN` | unset | Required only for `agent-vm sentry apply-dashboards` |
 | `SENTRY_TRACES_SAMPLE_RATE` | `1.0` | Sentry transaction sample rate |

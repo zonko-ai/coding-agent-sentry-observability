@@ -188,7 +188,7 @@ def cmd_self_test(config: Any, dry_run: bool) -> int:
             timestamp=utc_now(),
             source_event_id=f"{agent}:{marker}",
             session_id=marker,
-            project="coding-agents-mem",
+            project="coding-agent-sentry-observability",
             cwd=str(Path.cwd()),
             success=True,
             measurements={"self_test": 1},

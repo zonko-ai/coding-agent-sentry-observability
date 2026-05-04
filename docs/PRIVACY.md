@@ -4,7 +4,7 @@ Agent telemetry can contain sensitive data. Treat local databases, logs, and exp
 
 ## Default Behavior
 
-By default, `coding-agents-mem`:
+By default, `coding-agent-sentry-observability`:
 
 - does not export raw prompt or response text
 - hashes text previews and first-user-message text
@@ -35,6 +35,6 @@ Sentry receives normalized events and transactions. Measurements may include tok
 
 The SQLite memory store defaults to:
 
-`~/.agent-vm-observability/memory.db`
+`~/.coding-agent-sentry-observability/memory.db`
 
 It is not encrypted by this package. Use filesystem permissions, disk encryption, and backups according to your own security requirements.

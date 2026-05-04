@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for taking the time to improve `coding-agents-mem`.
+Thanks for taking the time to improve `coding-agent-sentry-observability`.
 
 ## Development Setup
 

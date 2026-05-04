@@ -7,7 +7,9 @@ import sys
 import time
 from pathlib import Path
 
-LABEL = "com.sahan.agent-vm-observability"
+LABEL = "com.zonko.coding-agent-sentry-observability"
+LEGACY_LABELS = ("com.sahan.agent-vm-observability", "com.sahan.coding-agent-sentry-observability")
+LOG_DIR = Path.home() / "Library/Logs/coding-agent-sentry-observability"
 
 
 def plist_path() -> Path:
@@ -21,8 +23,8 @@ def plist_payload() -> dict[str, object]:
         "RunAtLoad": True,
         "KeepAlive": True,
         "WorkingDirectory": str(Path.home()),
-        "StandardOutPath": str(Path.home() / "Library/Logs/agent-vm-observability/bridge.out.log"),
-        "StandardErrorPath": str(Path.home() / "Library/Logs/agent-vm-observability/bridge.err.log"),
+        "StandardOutPath": str(LOG_DIR / "bridge.out.log"),
+        "StandardErrorPath": str(LOG_DIR / "bridge.err.log"),
         "SoftResourceLimits": {"NumberOfFiles": 4096},
     }
 
@@ -30,7 +32,7 @@ def plist_payload() -> dict[str, object]:
 def install_launchd(load: bool = True) -> Path:
     path = plist_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    (Path.home() / "Library/Logs/agent-vm-observability").mkdir(parents=True, exist_ok=True)
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
     path.write_bytes(plistlib.dumps(plist_payload()))
     if load:
         stop_launchd()
@@ -54,10 +56,14 @@ def start_launchd() -> Path:
 
 def stop_launchd() -> None:
     domain = f"gui/{os.getuid()}"
-    subprocess.run(["launchctl", "bootout", f"{domain}/{LABEL}"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    for label in (LABEL, *LEGACY_LABELS):
+        subprocess.run(["launchctl", "bootout", f"{domain}/{label}"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def launchd_status() -> str:
     domain = f"gui/{os.getuid()}"
-    result = subprocess.run(["launchctl", "print", f"{domain}/{LABEL}"], capture_output=True, text=True)
-    return result.stdout if result.returncode == 0 else "launchd service is not loaded"
+    for label in (LABEL, *LEGACY_LABELS):
+        result = subprocess.run(["launchctl", "print", f"{domain}/{label}"], capture_output=True, text=True)
+        if result.returncode == 0:
+            return result.stdout
+    return "launchd service is not loaded"

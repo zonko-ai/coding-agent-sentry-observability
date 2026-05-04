@@ -22,6 +22,7 @@ def test_load_env_files_preserves_shell_env_and_prefers_new_config(monkeypatch, 
     legacy_path.write_text("SENTRY_PROJECT=legacy-project\nSENTRY_ORG=legacy-org\n")
     config_path.write_text("SENTRY_PROJECT=config-project\nSENTRY_ORG=config-org\n")
     monkeypatch.setattr(config_module, "LEGACY_CONFIG_PATH", legacy_path)
+    monkeypatch.setattr(config_module, "OLD_CONFIG_PATH", tmp_path / "old-config.env")
     monkeypatch.setattr(config_module, "CONFIG_PATH", config_path)
     monkeypatch.setenv("SENTRY_PROJECT", "shell-project")
     monkeypatch.delenv("SENTRY_ORG", raising=False)

@@ -1,8 +1,8 @@
-# coding-agents-mem
+# coding-agent-sentry-observability
 
 Local observability and shared memory for coding agents.
 
-`coding-agents-mem` tails local agent telemetry, normalizes it into a shared SQLite store, and can mirror sanitized traces to Sentry. It is designed for developers who use multiple coding agents on the same workstation or VM and want one place to inspect usage, cost, sessions, tools, failures, and reusable context.
+`coding-agent-sentry-observability` tails local agent telemetry, normalizes it into a shared SQLite store, and can mirror sanitized traces to Sentry. It is designed for developers who use multiple coding agents on the same workstation or VM and want one place to inspect usage, cost, sessions, tools, failures, and reusable context.
 
 ## Supported Agents
 
@@ -15,8 +15,8 @@ Raw message text is disabled by default. The bridge records lengths, hashes, met
 ## Install
 
 ```bash
-git clone <your-fork-or-repo-url> coding-agents-mem
-cd coding-agents-mem
+git clone https://github.com/zonko-ai/coding-agent-sentry-observability.git
+cd coding-agent-sentry-observability
 ./scripts/install.sh
 ```
 
@@ -31,8 +31,8 @@ python -m pip install -e ".[dev]"
 Create a local config file:
 
 ```bash
-mkdir -p ~/.config/agent-vm-observability
-cp .env.example ~/.config/agent-vm-observability/env
+mkdir -p ~/.config/coding-agent-sentry-observability
+cp .env.example ~/.config/coding-agent-sentry-observability/env
 ```
 
 Set `SENTRY_DSN`, `SENTRY_ORG`, and `SENTRY_PROJECT_ID` only if you want Sentry export or dashboard provisioning. The local SQLite memory store works without Sentry.
@@ -47,6 +47,19 @@ agent-vm dashboard --port 8765
 ```
 
 Open `http://127.0.0.1:8765` for the local dashboard.
+
+## Why Ingestion and Local Storage?
+
+Ingestion is the collector and normalizer. It reads raw telemetry from each agent source and converts Codex, Claude Code, and Pi records into one common shape: sessions, turns, model calls, tool calls, token counts, costs, failures, projects, and timing.
+
+Local storage is the private source of truth. Normalized traces are written to SQLite so the local dashboard, usage rollups, memory search, context commands, deduplication, and backfills work even without Sentry.
+
+```text
+Agent logs -> ingestion -> normalized traces -> local SQLite
+                                         -> optional sanitized Sentry export
+```
+
+If you only want Sentry dashboards, set `AGENT_VM_RECORD_MEMORY=0` to skip local SQLite writes. Keeping it enabled is recommended because it preserves a local, queryable history while Sentry remains the shared observability layer.
 
 ## Common Commands
 
@@ -71,8 +84,8 @@ agent-vm memory rebuild-fts
 
 The bridge reads environment variables from:
 
-1. `~/.config/agent-sentry/env` for backward compatibility
-2. `~/.config/agent-vm-observability/env` as the preferred path
+1. legacy config files from earlier releases, if present
+2. `~/.config/coding-agent-sentry-observability/env` as the preferred path
 3. the current shell environment
 
 Useful variables:
@@ -81,9 +94,9 @@ Useful variables:
 | --- | --- | --- |
 | `SENTRY_DSN` | unset | Enables Sentry export when present |
 | `SENTRY_ORG` | unset | Required for `agent-vm sentry apply-dashboards` |
-| `SENTRY_PROJECT` | `agent-vm-usage` | Sentry project slug |
+| `SENTRY_PROJECT` | `agent-vm-usage` | Sentry project slug for status/config display |
 | `SENTRY_PROJECT_ID` | unset | Optional project id for dashboard payloads |
-| `AGENT_VM_MEMORY_DB` | `~/.agent-vm-observability/memory.db` | Shared SQLite database |
+| `AGENT_VM_MEMORY_DB` | `~/.coding-agent-sentry-observability/memory.db` | Shared SQLite database |
 | `AGENT_VM_CODEX_LOGS_DB` | `~/.codex/logs_2.sqlite` | Codex OTel source |
 | `AGENT_VM_CODEX_STATE_DB` | `~/.codex/state_5.sqlite` | Codex thread source |
 | `AGENT_VM_CLAUDE_GLOB` | `~/.claude/projects/**/*.jsonl` | Claude Code JSONL source |

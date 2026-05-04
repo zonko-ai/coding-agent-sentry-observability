@@ -6,11 +6,15 @@ from dataclasses import dataclass
 from pathlib import Path
 
 HOME = Path.home()
+APP_NAME = "coding-agent-sentry-observability"
 LEGACY_CONFIG_PATH = HOME / ".config/agent-sentry/env"
-CONFIG_PATH = HOME / ".config/agent-vm-observability/env"
+OLD_CONFIG_PATH = HOME / ".config/agent-vm-observability/env"
+CONFIG_PATH = HOME / f".config/{APP_NAME}/env"
 LEGACY_STATE_PATH = HOME / ".local/state/agent-sentry/state.json"
-STATE_PATH = HOME / ".local/state/agent-vm-observability/state.json"
-MEMORY_DB_PATH = HOME / ".agent-vm-observability/memory.db"
+OLD_STATE_PATH = HOME / ".local/state/agent-vm-observability/state.json"
+STATE_PATH = HOME / f".local/state/{APP_NAME}/state.json"
+OLD_MEMORY_DB_PATH = HOME / ".agent-vm-observability/memory.db"
+MEMORY_DB_PATH = HOME / f".{APP_NAME}/memory.db"
 CODEX_LOGS_DB = HOME / ".codex/logs_2.sqlite"
 CODEX_STATE_DB = HOME / ".codex/state_5.sqlite"
 CLAUDE_PROJECTS_GLOB = str(HOME / ".claude/projects/**/*.jsonl")
@@ -34,11 +38,20 @@ def _parse_env_line(line: str) -> tuple[str, str] | None:
     return key, value
 
 
+def _existing_path(default: Path, *fallbacks: Path) -> Path:
+    if default.exists():
+        return default
+    for path in fallbacks:
+        if path.exists():
+            return path
+    return default
+
+
 def load_env_files() -> None:
     """Load legacy and package config files without executing shell code."""
     shell_keys = set(os.environ)
     loaded: dict[str, str] = {}
-    for path in (LEGACY_CONFIG_PATH, CONFIG_PATH):
+    for path in (LEGACY_CONFIG_PATH, OLD_CONFIG_PATH, CONFIG_PATH):
         if not path.exists():
             continue
         for line in path.read_text().splitlines():
@@ -99,8 +112,11 @@ def get_config() -> RuntimeConfig:
     return RuntimeConfig(
         config_path=env_path("AGENT_VM_CONFIG", CONFIG_PATH),
         legacy_config_path=env_path("AGENT_SENTRY_CONFIG", LEGACY_CONFIG_PATH),
-        state_path=env_path("AGENT_VM_STATE", env_path("AGENT_SENTRY_STATE", STATE_PATH)),
-        memory_db_path=env_path("AGENT_VM_MEMORY_DB", MEMORY_DB_PATH),
+        state_path=env_path(
+            "AGENT_VM_STATE",
+            env_path("AGENT_SENTRY_STATE", _existing_path(STATE_PATH, OLD_STATE_PATH, LEGACY_STATE_PATH)),
+        ),
+        memory_db_path=env_path("AGENT_VM_MEMORY_DB", _existing_path(MEMORY_DB_PATH, OLD_MEMORY_DB_PATH)),
         codex_logs_db=env_path("AGENT_VM_CODEX_LOGS_DB", env_path("AGENT_SENTRY_CODEX_LOGS_DB", CODEX_LOGS_DB)),
         codex_state_db=env_path("AGENT_VM_CODEX_STATE_DB", env_path("AGENT_SENTRY_CODEX_STATE_DB", CODEX_STATE_DB)),
         claude_projects_glob=os.environ.get("AGENT_VM_CLAUDE_GLOB") or os.environ.get("AGENT_SENTRY_CLAUDE_GLOB") or CLAUDE_PROJECTS_GLOB,

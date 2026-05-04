@@ -3,13 +3,13 @@ requires = ["hatchling>=1.26"]
 build-backend = "hatchling.build"
 
 [project]
-name = "coding-agents-mem"
+name = "coding-agent-sentry-observability"
 version = "0.1.0"
 description = "Local observability and shared memory for Codex, Claude Code, and Pi agent usage."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
-authors = [{ name = "coding-agents-mem contributors" }]
+authors = [{ name = "coding-agent-sentry-observability contributors" }]
 keywords = ["agents", "observability", "sentry", "codex", "claude-code", "pi"]
 classifiers = [
   "Development Status :: 3 - Alpha",
