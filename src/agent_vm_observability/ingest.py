@@ -228,6 +228,12 @@ class AgentIngestor:
         if not conn:
             return 0
         last_id = int(state.get("codex_logs_last_id", 0) or 0)
+        max_row = conn.execute("select coalesce(max(id), 0) as max_id from logs where target = 'codex_otel.log_only'").fetchone()
+        max_id = int(max_row["max_id"] or 0) if max_row else 0
+        if last_id > max_id:
+            log(f"codex log watermark {last_id} is ahead of source max {max_id}; rewinding to start of current DB")
+            last_id = 0
+            state["codex_logs_last_id"] = 0
         rows = conn.execute(
             """
             select id, ts, ts_nanos, level, target, feedback_log_body, module_path, file, line, thread_id, process_uuid, estimated_bytes
@@ -434,6 +440,7 @@ def codex_log_to_trace(row: sqlite3.Row, git: GitMetadataCache) -> NormalizedTra
     success = _bool(parsed.get("success"))
     session_id = row["thread_id"] or parsed.get("thread.id") or parsed.get("conversation.id")
     turn_id = parsed.get("turn.id") or parsed.get("submission.id")
+    tool_name = parsed.get("tool_name") or parsed.get("tool.name")
     trace = NormalizedTrace(
         agent="codex",
         kind=f"codex.{kind}" if not kind.startswith("codex.") else kind,
@@ -451,6 +458,8 @@ def codex_log_to_trace(row: sqlite3.Row, git: GitMetadataCache) -> NormalizedTra
         model=parsed.get("model") or parsed.get("slug"),
         provider=parsed.get("provider"),
         agent_version=parsed.get("app.version"),
+        tool_name=tool_name,
+        tool_kind="codex_tool" if tool_name else None,
         duration_ms=measurements.pop("duration_ms", None),
         success=success,
         token_usage=token_usage,

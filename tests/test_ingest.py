@@ -25,6 +25,7 @@ def test_codex_log_to_trace_normalizes_fields(tmp_path: Path) -> None:
     )
     body = (
         f'event.name="codex.websocket_event" model="gpt-5.4" cwd="{tmp_path}" success=true duration_ms=9 '
+        'tool_name=exec_command '
         'input_token_count=110 cached_token_count=100 output_token_count=5 reasoning_token_count=2 tool_token_count=115'
     )
     conn.execute(
@@ -38,6 +39,8 @@ def test_codex_log_to_trace_normalizes_fields(tmp_path: Path) -> None:
     assert trace.title == "codex.codex.websocket_event"
     assert trace.session_id == "thread-1"
     assert trace.model == "gpt-5.4"
+    assert trace.tool_name == "exec_command"
+    assert trace.tool_kind == "codex_tool"
     assert trace.duration_ms == 9
     assert trace.measurements["estimated_bytes"] == 120
     assert trace.token_usage["input_tokens"] == 10
