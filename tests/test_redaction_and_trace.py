@@ -14,9 +14,21 @@ def test_redacts_common_secret_shapes() -> None:
 
 
 def test_scrub_redacts_secret_keys() -> None:
-    value = scrub({"token": "abc", "nested": {"password": "pw"}, "safe": "ok"})
+    value = scrub(
+        {
+            "token": "abc",
+            "access_token": "secret",
+            "nested": {"password": "pw"},
+            "gen_ai.usage.total_tokens": 120,
+            "input_token_count": 100,
+            "safe": "ok",
+        }
+    )
     assert value["token"] == "[redacted]"
+    assert value["access_token"] == "[redacted]"
     assert value["nested"]["password"] == "[redacted]"
+    assert value["gen_ai.usage.total_tokens"] == 120
+    assert value["input_token_count"] == 100
     assert value["safe"] == "ok"
 
 

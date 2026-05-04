@@ -20,6 +20,8 @@ cd coding-agent-sentry-observability
 ./scripts/install.sh
 ```
 
+The installer creates the config file and imports the last 7 days of local agent history by default (`10080` minutes). Override this with `AGENT_VM_INSTALL_BACKFILL_MINUTES=<minutes>` or skip it with `AGENT_VM_INSTALL_SKIP_BACKFILL=1`. If you enable Sentry after the first install, rerun `agent-vm backfill --minutes 10080` to mirror that history to Sentry too.
+
 Manual setup:
 
 ```bash
@@ -41,9 +43,8 @@ Set `SENTRY_DSN`, `SENTRY_ORG`, and `SENTRY_PROJECT_ID` only if you want Sentry 
 
 ```bash
 agent-vm status
-agent-vm backfill --minutes 30 --dry-run
-agent-vm bridge --loop
 agent-vm dashboard --port 8765
+agent-vm bridge --loop
 ```
 
 Open `http://127.0.0.1:8765` for the local dashboard.

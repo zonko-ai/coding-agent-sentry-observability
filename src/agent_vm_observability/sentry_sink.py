@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Any
 
 from . import VERSION
 from .config import RuntimeConfig
 from .model import NormalizedTrace, normalize_level
-from .redaction import scrub
+from .redaction import safe_tag_value, scrub
 from .timeutil import to_timestamp
 
 
@@ -16,6 +17,10 @@ class CapturedTrace:
     title: str
     tags: dict[str, str]
     measurements: dict[str, int | float]
+
+
+USAGE_SCHEMA = "llm_usage_v7"
+USAGE_MEASUREMENT_KEYS = ("input_tokens", "output_tokens", "total_tokens", "cost_usd")
 
 
 class SentrySink:
@@ -42,6 +47,7 @@ class SentrySink:
             environment=os.environ.get("SENTRY_ENVIRONMENT", "local-vm"),
             release=f"coding-agent-sentry-observability@{VERSION}",
             traces_sample_rate=self.config.traces_sample_rate,
+            transport_queue_size=10000,
             send_default_pii=False,
             server_name=os.environ.get("AGENT_VM_SENTRY_SERVER_NAME", "local-vm"),
             before_send=lambda event, hint: scrub(event),
@@ -57,6 +63,16 @@ class SentrySink:
     def capture(self, trace: NormalizedTrace) -> None:
         tags = trace.sentry_tags()
         measurements = trace.all_measurements()
+        if _has_usage_measurements(measurements):
+            tags["usage_schema"] = USAGE_SCHEMA
+            if trace.kind.startswith("usage_v") or str(trace.tags.get("usage_canonical", "")).lower() == "true":
+                tags["usage_canonical"] = "true"
+            usage_rollup = trace.tags.get("usage_rollup")
+            if isinstance(usage_rollup, str) and usage_rollup:
+                tags["usage_rollup"] = safe_tag_value(usage_rollup)
+            usage_model = trace.model or trace.tags.get("usage_model")
+            if isinstance(usage_model, str) and usage_model:
+                tags["usage_model"] = safe_tag_value(usage_model)
         if self.dry_run or len(self.captured) < 1000:
             self.captured.append(CapturedTrace(trace.title, tags, measurements))
         if self.dry_run:
@@ -87,7 +103,11 @@ class SentrySink:
             event["timestamp"] = ts
         self._sentry_sdk.capture_event(event)
 
-        transaction = self._sentry_sdk.start_transaction(name=trace.title, op=_transaction_op(trace))
+        start_timestamp = trace.timestamp
+        transaction_kwargs: dict[str, Any] = {"name": trace.title, "op": _transaction_op(trace)}
+        if start_timestamp is not None:
+            transaction_kwargs["start_timestamp"] = start_timestamp
+        transaction = self._sentry_sdk.start_transaction(**transaction_kwargs)
         for key, value in tags.items():
             transaction.set_tag(key, value)
         for key, value in measurements.items():
@@ -98,7 +118,11 @@ class SentrySink:
         transaction.set_data("agent_measurements", measurements)
         transaction.set_data("event_timestamp", ts)
         transaction.set_data("source_event_id", trace.stable_event_id())
-        transaction.finish()
+        end_timestamp = None
+        if trace.timestamp is not None:
+            duration_ms = trace.duration_ms if trace.duration_ms is not None else 1.0
+            end_timestamp = trace.timestamp + timedelta(milliseconds=max(float(duration_ms), 1.0))
+        transaction.finish(end_timestamp=end_timestamp)
 
     def capture_exception(self, exc: BaseException) -> None:
         if self.enabled and self._sentry_sdk is not None:
@@ -113,11 +137,15 @@ def _measurement_name(key: str) -> str:
     return key.replace(".", "_").replace("-", "_")
 
 
+def _has_usage_measurements(measurements: dict[str, int | float]) -> bool:
+    return any(key in measurements for key in USAGE_MEASUREMENT_KEYS)
+
+
 def _transaction_op(trace: NormalizedTrace) -> str:
     if trace.tool_name:
         return "gen_ai.execute_tool"
     measurements = trace.all_measurements()
-    if trace.model and any(key in measurements for key in ("input_tokens", "output_tokens", "total_tokens")):
+    if _has_usage_measurements(measurements):
         return "gen_ai.invoke_agent"
     return f"agent.{trace.agent}.{trace.kind}"
 
@@ -126,11 +154,12 @@ def _gen_ai_attributes(trace: NormalizedTrace, measurements: dict[str, int | flo
     data: dict[str, Any] = {"gen_ai.agent.name": trace.agent}
     if trace.provider:
         data["gen_ai.system"] = trace.provider
-    if trace.model:
-        data["gen_ai.request.model"] = trace.model
+    has_usage = _has_usage_measurements(measurements)
     if trace.tool_name:
         data["gen_ai.tool.name"] = trace.tool_name
         data["gen_ai.operation.name"] = "execute_tool"
+    elif has_usage:
+        data["gen_ai.operation.name"] = "invoke_agent"
     else:
         data["gen_ai.operation.name"] = trace.kind
 
@@ -147,6 +176,15 @@ def _gen_ai_attributes(trace: NormalizedTrace, measurements: dict[str, int | flo
     cached_input_tokens = int(measurements.get("cache_read_input_tokens") or 0)
     if cached_input_tokens:
         data["gen_ai.usage.input_tokens.cached"] = cached_input_tokens
+    cache_write_tokens = int(
+        measurements.get("cache_creation_input_tokens")
+        or (
+            float(measurements.get("cache_creation_5m_input_tokens") or 0)
+            + float(measurements.get("cache_creation_1h_input_tokens") or 0)
+        )
+    )
+    if cache_write_tokens:
+        data["gen_ai.usage.input_tokens.cache_write"] = cache_write_tokens
     output_tokens = int(measurements.get("output_tokens") or 0)
     if output_tokens:
         data["gen_ai.usage.output_tokens"] = output_tokens
@@ -156,4 +194,13 @@ def _gen_ai_attributes(trace: NormalizedTrace, measurements: dict[str, int | flo
     total_tokens = int(measurements.get("total_tokens") or 0)
     if total_tokens:
         data["gen_ai.usage.total_tokens"] = total_tokens
+    input_cost_usd = float(measurements.get("input_cost_usd") or 0)
+    if input_cost_usd:
+        data["gen_ai.cost.input_tokens"] = input_cost_usd
+    output_cost_usd = float(measurements.get("output_cost_usd") or 0)
+    if output_cost_usd:
+        data["gen_ai.cost.output_tokens"] = output_cost_usd
+    cost_usd = float(measurements.get("cost_usd") or 0)
+    if cost_usd:
+        data["gen_ai.cost.total_tokens"] = cost_usd
     return data

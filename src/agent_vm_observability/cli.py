@@ -6,6 +6,8 @@ import os
 import socket
 import tempfile
 import time
+from contextlib import closing
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -14,12 +16,13 @@ from .config import get_config, load_env_files
 from .ingest import AgentIngestor, log, run_bridge_loop
 from .launchd import install_launchd, launchd_status, start_launchd, stop_launchd
 from .local_dashboard import run_dashboard
-from .memory import MemoryStore
+from .memory import MemoryStore, USAGE_SUM_KEYS, _json_object, _usage_identity, _usage_measurements
+from .model import NormalizedTrace
 from .redaction import short_hash
 from .sentry_dashboards import SentryDashboardClient
-from .sentry_sink import SentrySink
+from .sentry_sink import SentrySink, USAGE_SCHEMA
 from .state import StateStore, empty_state
-from .timeutil import utc_now
+from .timeutil import parse_timestamp, utc_now
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -215,7 +218,215 @@ def cmd_backfill(config: Any, minutes: int, dry_run: bool, update_state: bool) -
         save = store.save
     sink = SentrySink(config, dry_run=dry_run)
     memory_store = MemoryStore(config.memory_db_path)
-    return run_bridge_loop(config, sink, memory_store, state, save, loop=False, once=True, backfill_minutes=minutes)
+    result = run_bridge_loop(config, sink, memory_store, state, save, loop=False, once=True, backfill_minutes=minutes)
+    if result != 0:
+        return result
+    return export_sentry_usage_rollups(config, memory_store, minutes, dry_run=dry_run)
+
+
+def export_sentry_usage_rollups(config: Any, memory_store: MemoryStore, minutes: int, dry_run: bool = False) -> int:
+    sink = SentrySink(config, dry_run=dry_run)
+    if not sink.configure():
+        log("SENTRY_DSN is not configured; skipping Sentry usage rollups.")
+        return 0
+
+    rows = _usage_rows(memory_store, minutes)
+    if not rows:
+        log("no usage rows found for Sentry rollup export")
+        return 0
+
+    totals = _empty_usage_totals()
+    by_agent: dict[str, dict[str, Any]] = {}
+    by_model: dict[str, dict[str, Any]] = {}
+    by_project: dict[str, dict[str, Any]] = {}
+    sessions: set[str] = set()
+    now = utc_now()
+    min_sentry_timestamp = now - timedelta(days=4)
+    clamped = 0
+    sent = 0
+
+    for row in rows:
+        measurements = row["measurements"]
+        original_timestamp = row["timestamp"]
+        timestamp = original_timestamp
+        if timestamp < min_sentry_timestamp:
+            timestamp = min_sentry_timestamp + timedelta(seconds=clamped)
+            clamped += 1
+        trace = _usage_trace(
+            row,
+            measurements,
+            "event",
+            timestamp=timestamp,
+            original_timestamp=original_timestamp,
+        )
+        sink.capture(trace)
+        sent += 1
+
+        session_id = row["session_id"]
+        if session_id:
+            sessions.add(str(session_id))
+        _add_usage(totals, measurements)
+        _add_usage(by_agent.setdefault(row["agent"], _empty_usage_totals()), measurements)
+        _add_usage(by_model.setdefault(row["model"], _empty_usage_totals()), measurements)
+        _add_usage(by_project.setdefault(row["project"], _empty_usage_totals()), measurements)
+        if sent % 500 == 0:
+            sink.flush(timeout=90)
+
+    rollup_timestamp = now
+    sink.capture(
+        _usage_trace(
+            _rollup_row("total", agent="all", model="all", project="all"),
+            totals,
+            "total",
+            timestamp=rollup_timestamp,
+        )
+    )
+    for agent, measurements in by_agent.items():
+        sink.capture(
+            _usage_trace(
+                _rollup_row("agent", agent=agent, model="all", project="all"),
+                measurements,
+                "agent",
+                timestamp=rollup_timestamp,
+            )
+        )
+    for model, measurements in by_model.items():
+        sink.capture(
+            _usage_trace(
+                _rollup_row("model", agent="all", model=model, project="all"),
+                measurements,
+                "model",
+                timestamp=rollup_timestamp,
+            )
+        )
+    for project, measurements in by_project.items():
+        sink.capture(
+            _usage_trace(
+                _rollup_row("project", agent="all", model="all", project=project),
+                measurements,
+                "project",
+                timestamp=rollup_timestamp,
+            )
+        )
+    sink.flush(timeout=240)
+    log(
+        "exported Sentry usage rollups: "
+        f"events={sent} sessions={len(sessions)} clamped={clamped} "
+        f"tokens={int(round(totals.get('total_tokens') or 0))} cost_usd={round(float(totals.get('cost_usd') or 0), 6)}"
+    )
+    return 0
+
+
+def _usage_rows(memory_store: MemoryStore, minutes: int) -> list[dict[str, Any]]:
+    cutoff_epoch = max(int(time.time()) - minutes * 60, 0)
+    seen: set[str] = set()
+    rows: list[dict[str, Any]] = []
+    memory_store.initialize()
+    with closing(memory_store.connect()) as conn:
+        records = conn.execute(
+            """
+            select e.id, e.kind, e.title, e.level, e.timestamp, e.timestamp_epoch, e.project, e.model,
+                   e.success, e.source_event_id, e.measurements_json, e.extra_json, e.duration_ms,
+                   a.name as agent, s.external_session_id, s.cwd
+            from events e
+            join agents a on a.id = e.agent_id
+            left join agent_sessions s on s.id = e.session_db_id
+            where coalesce(e.timestamp_epoch, 0) >= ?
+            order by e.timestamp_epoch asc, e.id asc
+            """,
+            (cutoff_epoch,),
+        ).fetchall()
+    for record in records:
+        if record["kind"] == "thread_update":
+            continue
+        measurements = _usage_measurements(_json_object(record["measurements_json"]))
+        if not any(measurements.get(key) for key in USAGE_SUM_KEYS):
+            continue
+        extra = _json_object(record["extra_json"])
+        usage_key = _usage_identity(record["agent"], record["kind"], record["source_event_id"], extra)
+        if usage_key in seen:
+            continue
+        seen.add(usage_key)
+        rows.append(
+            {
+                "agent": record["agent"],
+                "kind": record["kind"],
+                "level": record["level"] or "info",
+                "timestamp": parse_timestamp(record["timestamp"])
+                or datetime.fromtimestamp(record["timestamp_epoch"], timezone.utc),
+                "project": record["project"] or "unknown",
+                "model": record["model"] or ("gpt-5.5" if record["agent"] == "pi" else "unknown"),
+                "success": None if record["success"] is None else bool(record["success"]),
+                "source_event_id": record["source_event_id"],
+                "duration_ms": record["duration_ms"],
+                "session_id": str(record["external_session_id"] or record["source_event_id"] or record["id"]),
+                "cwd": record["cwd"],
+                "measurements": measurements,
+                "usage_key": usage_key,
+            }
+        )
+    return rows
+
+
+def _rollup_row(rollup: str, *, agent: str, model: str, project: str) -> dict[str, str]:
+    return {
+        "agent": agent,
+        "model": model,
+        "project": project,
+        "session_id": f"rollup:{USAGE_SCHEMA}:{rollup}:{agent}:{model}:{project}",
+    }
+
+
+def _usage_trace(
+    row: dict[str, Any],
+    measurements: dict[str, float],
+    rollup: str,
+    *,
+    timestamp: datetime,
+    original_timestamp: datetime | None = None,
+) -> NormalizedTrace:
+    model = str(row.get("model") or "unknown")
+    agent = str(row.get("agent") or "all")
+    return NormalizedTrace(
+        agent=agent,
+        kind=f"usage_v{USAGE_SCHEMA.rsplit('_v', 1)[-1]}",
+        timestamp=timestamp,
+        level=str(row.get("level") or "info"),
+        source_event_id=f"{USAGE_SCHEMA}:{rollup}:{row.get('usage_key') or row.get('session_id')}",
+        session_id=str(row.get("session_id") or f"rollup:{USAGE_SCHEMA}:{rollup}"),
+        project=str(row.get("project") or "unknown"),
+        cwd=row.get("cwd") if isinstance(row.get("cwd"), str) else None,
+        model=model if model != "all" else None,
+        provider=_provider_for_model(model, agent),
+        duration_ms=float(row.get("duration_ms") or 1.0),
+        success=row.get("success") if isinstance(row.get("success"), bool) else None,
+        measurements=measurements,
+        tags={"usage_rollup": rollup, "source_kind": str(row.get("kind") or rollup)},
+        extra={
+            "usage_rollup": {
+                "rollup": rollup,
+                "original_timestamp": original_timestamp.isoformat() if original_timestamp else None,
+            }
+        },
+    )
+
+
+def _empty_usage_totals() -> dict[str, float]:
+    return {key: 0.0 for key in USAGE_SUM_KEYS}
+
+
+def _add_usage(total: dict[str, float], measurements: dict[str, float]) -> None:
+    for key in USAGE_SUM_KEYS:
+        total[key] += float(measurements.get(key) or 0)
+
+
+def _provider_for_model(model: str, agent: str) -> str:
+    value = model.lower()
+    if value.startswith("gpt-"):
+        return "openai"
+    if value.startswith("claude"):
+        return "anthropic"
+    return agent
 
 
 def cmd_memory(config: Any, args: Any) -> int:

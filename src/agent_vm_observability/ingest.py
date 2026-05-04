@@ -375,6 +375,8 @@ class AgentIngestor:
                 continue
 
             suggester_root = path.parent.parent
+            latest_model = entry.get("latest_model") if isinstance(entry.get("latest_model"), str) else None
+            pending_model = latest_model
             with path.open("rb") as handle:
                 handle.seek(offset)
                 for raw_line in handle:
@@ -392,17 +394,28 @@ class AgentIngestor:
                     record_ts = parse_timestamp(record.get("at"))
                     if since and record_ts and record_ts < since:
                         continue
+                    meta = record.get("meta") if isinstance(record.get("meta"), dict) else {}
+                    model = _pi_model(meta) or _pi_model_from_payload_preview(meta)
+                    if model:
+                        latest_model = model
+                        pending_model = model
+                    model_hint = _pi_model(meta) or pending_model or latest_model or _pi_default_model(meta)
+                    record_for_trace = record
+                    if model_hint and not _pi_model(meta):
+                        record_for_trace = {**record, "meta": {**meta, "model": model_hint}}
                     trace = pi_event_to_trace(
-                        record,
+                        record_for_trace,
                         suggester_root,
                         self.git,
                         self.config.include_text,
                         source_event_id=f"pi-log:{file_key}:{start_offset}",
                     )
+                    if record.get("message") == "suggestion.generated" and pending_model:
+                        pending_model = latest_model
                     trace.extra["ndjson_path"] = file_key
                     self.emit(trace)
                     processed += 1
-            entry.update({"offset": offset, "inode": stat.st_ino, "mtime": stat.st_mtime})
+            entry.update({"offset": offset, "inode": stat.st_ino, "mtime": stat.st_mtime, "latest_model": latest_model})
         return processed
 
 
@@ -680,7 +693,7 @@ def pi_event_to_trace(
         repo=git_meta["repo"],
         git_branch=git_meta["git_branch"],
         git_sha=git_meta["git_sha"],
-        model=meta.get("model") if isinstance(meta.get("model"), str) else None,
+        model=_pi_model(meta),
         provider="pi",
         tool_name=meta.get("tool") if isinstance(meta.get("tool"), str) else None,
         tool_kind="pi_tool" if meta.get("tool") else None,
@@ -704,6 +717,29 @@ def pi_event_to_trace(
     )
     apply_cost_estimate(trace)
     return trace
+
+
+def _pi_model(meta: dict[str, Any]) -> str | None:
+    value = meta.get("model")
+    return value if isinstance(value, str) and value else None
+
+
+def _pi_default_model(meta: dict[str, Any]) -> str | None:
+    if any(_float_or_none(meta.get(key)) for key in ("cost", "totalTokens", "tokens")):
+        return "gpt-5.5"
+    return None
+
+
+def _pi_model_from_payload_preview(meta: dict[str, Any]) -> str | None:
+    preview = meta.get("payloadPreview")
+    if not isinstance(preview, str) or not preview.strip().startswith("{"):
+        return None
+    try:
+        payload = json.loads(preview)
+    except json.JSONDecodeError:
+        return None
+    value = payload.get("model") if isinstance(payload, dict) else None
+    return value if isinstance(value, str) and value else None
 
 
 def _pi_token_usage(meta: dict[str, Any]) -> dict[str, int | float]:
@@ -832,13 +868,19 @@ def run_bridge_loop(
         state = empty_state()
 
     running = True
+    sentry_warning_logged = False
     while running:
         if not sink.configure():
-            log("SENTRY_DSN is not configured; waiting.")
-            if once:
-                return 2
-            time.sleep(max(config.poll_seconds, 30))
-            continue
+            if memory and config.record_memory:
+                if not sentry_warning_logged:
+                    log("SENTRY_DSN is not configured; recording local memory only.")
+                    sentry_warning_logged = True
+            else:
+                log("SENTRY_DSN is not configured; waiting.")
+                if once:
+                    return 2
+                time.sleep(max(config.poll_seconds, 30))
+                continue
         if not state.get("initialized_at"):
             ingestor.initialize_state(state, backfill_since=backfill_since)
             save_state(state)

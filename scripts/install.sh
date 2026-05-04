@@ -28,13 +28,31 @@ if not CONFIG_PATH.exists():
         copyfile(Path(".env.example"), CONFIG_PATH)
 PY
 
+BACKFILL_MINUTES="${AGENT_VM_INSTALL_BACKFILL_MINUTES:-10080}"
+if [[ "${AGENT_VM_INSTALL_SKIP_BACKFILL:-0}" =~ ^(1|true|yes|on)$ ]]; then
+  echo "Skipping initial backfill because AGENT_VM_INSTALL_SKIP_BACKFILL is set."
+else
+  echo "Backfilling the last ${BACKFILL_MINUTES} minutes of agent usage..."
+  if ! agent-vm backfill --minutes "$BACKFILL_MINUTES"; then
+    cat >&2 <<'WARN'
+Warning: initial usage backfill failed. Installation succeeded, but history was not imported.
+Run this after fixing configuration/source access:
+  agent-vm backfill --minutes 10080
+WARN
+  fi
+fi
+
 cat <<'MSG'
 Installed coding-agent-sentry-observability.
 
 Next steps:
   . .venv/bin/activate
   agent-vm status
-  agent-vm backfill --minutes 30 --dry-run
+  agent-vm dashboard --port 8765
+
+The installer imports the last 7 days by default. Set
+AGENT_VM_INSTALL_SKIP_BACKFILL=1 to skip or AGENT_VM_INSTALL_BACKFILL_MINUTES
+for a different window.
 
 Edit ~/.config/coding-agent-sentry-observability/env to enable Sentry export.
 MSG

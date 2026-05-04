@@ -37,12 +37,19 @@ def scrub(value: Any) -> Any:
         result: dict[str, Any] = {}
         for key, item in value.items():
             key_text = str(key)
-            if re.search(r"(?i)(token|secret|password|api[_-]?key|dsn)", key_text):
+            if _is_sensitive_key(key_text):
                 result[key_text] = "[redacted]"
             else:
                 result[key_text] = scrub(item)
         return result
     return value
+
+
+def _is_sensitive_key(key: str) -> bool:
+    normalized = key.lower().replace("-", "_")
+    if "tokens" in normalized or "token_count" in normalized:
+        return False
+    return bool(re.search(r"(?i)(^token$|[_\-.]token$|auth[_\-.]?token|access[_\-.]?token|refresh[_\-.]?token|secret|password|api[_\-.]?key|dsn)", key))
 
 
 def short_hash(value: str | None) -> str | None:
