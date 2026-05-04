@@ -15,6 +15,7 @@ from .ingest import AgentIngestor, log, run_bridge_loop
 from .launchd import install_launchd, launchd_status, start_launchd, stop_launchd
 from .local_dashboard import run_dashboard
 from .memory import MemoryStore
+from .redaction import short_hash
 from .sentry_dashboards import SentryDashboardClient
 from .sentry_sink import SentrySink
 from .state import StateStore, empty_state
@@ -191,7 +192,7 @@ def cmd_self_test(config: Any, dry_run: bool) -> int:
             cwd=str(Path.cwd()),
             success=True,
             measurements={"self_test": 1},
-            tags={"marker": marker, "host": socket.gethostname()},
+            tags={"marker": marker, "vm_host": f"host:{short_hash(socket.gethostname())}"},
             extra={"marker": marker, "purpose": "manual Sentry ingestion verification", "bridge_version": VERSION},
         )
         sink.capture(trace)

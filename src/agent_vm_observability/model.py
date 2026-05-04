@@ -153,7 +153,7 @@ class NormalizedTrace:
             "tool_kind": self.tool_kind,
             "command_kind": self.command_kind,
             "success": self.success,
-            "vm_host": socket.gethostname(),
+            "vm_host": f"host:{short_hash(socket.gethostname())}",
         }
         base.update(self.tags)
         alias_keys = {

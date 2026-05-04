@@ -43,6 +43,7 @@ class SentrySink:
             release=f"coding-agents-mem@{VERSION}",
             traces_sample_rate=self.config.traces_sample_rate,
             send_default_pii=False,
+            server_name=os.environ.get("AGENT_VM_SENTRY_SERVER_NAME", "local-vm"),
             before_send=lambda event, hint: scrub(event),
             before_send_transaction=lambda event, hint: scrub(event),
         )

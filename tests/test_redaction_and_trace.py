@@ -1,3 +1,5 @@
+import socket
+
 from agent_vm_observability.model import NormalizedTrace
 from agent_vm_observability.redaction import redact_text, scrub
 
@@ -38,4 +40,6 @@ def test_trace_hashes_local_paths_in_sentry_tags() -> None:
 
     assert tags["agent_cwd"].startswith("path:")
     assert tags["agent_repo"].startswith("path:")
+    assert tags["vm_host"].startswith("host:")
     assert "/Users/alice" not in str(tags)
+    assert socket.gethostname() not in str(tags)
