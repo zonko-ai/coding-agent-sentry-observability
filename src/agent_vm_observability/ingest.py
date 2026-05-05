@@ -33,9 +33,36 @@ PI_TEXT_KEYS = {
     "toolResultPreview",
 }
 
+SENTRY_USAGE_KEYS = {
+    "cache_creation_input_tokens",
+    "cache_read_input_tokens",
+    "cost_usd",
+    "input_cost_usd",
+    "input_tokens",
+    "input_tokens_total",
+    "output_cost_usd",
+    "output_tokens",
+    "reasoning_tokens",
+    "total_tokens",
+}
+CODEX_STREAM_KINDS = {"codex.sse_event", "codex.websocket_event"}
+
 
 def log(message: str) -> None:
     print(f"{utc_now().isoformat(timespec='seconds')} {message}", flush=True)
+
+
+def _should_capture_sentry(trace: NormalizedTrace) -> bool:
+    measurements = trace.all_measurements()
+    if any(key in measurements for key in SENTRY_USAGE_KEYS):
+        return True
+    if trace.tool_name or trace.success is False:
+        return True
+    if trace.level.lower() in {"critical", "error", "fatal"}:
+        return True
+    if trace.agent == "codex" and trace.kind in CODEX_STREAM_KINDS:
+        return False
+    return True
 
 
 def sqlite_connect(path: Path) -> sqlite3.Connection | None:
@@ -216,7 +243,8 @@ class AgentIngestor:
         }
 
     def emit(self, trace: NormalizedTrace) -> None:
-        self.sink.capture(trace)
+        if self.sink.dry_run or _should_capture_sentry(trace):
+            self.sink.capture(trace)
         if self.memory and self.config.record_memory and not self.sink.dry_run:
             try:
                 self.memory.record_trace(trace)
@@ -887,6 +915,12 @@ def run_bridge_loop(
             log(f"initialized for backfill since {backfill_since.isoformat()}" if backfill_since else "initialized at current Claude/Codex watermarks")
         try:
             batch_count = 0
+            max_batches = (
+                env_int("AGENT_VM_BACKFILL_MAX_BATCHES", env_int("AGENT_SENTRY_BACKFILL_MAX_BATCHES", 200))
+                if backfill_since
+                else env_int("AGENT_VM_LIVE_MAX_BATCHES", env_int("AGENT_SENTRY_LIVE_MAX_BATCHES", 20))
+            )
+            max_batches = max(1, max_batches)
             while True:
                 counts = ingestor.process_once(state, max_batch=config.max_batch, since=backfill_since)
                 save_state(state)
@@ -895,10 +929,13 @@ def run_bridge_loop(
                     log(f"exported usage batch: {counts}")
                     sink.flush(timeout=30)
                 batch_count += 1
-                if not backfill_since or total == 0:
+                if total == 0:
                     break
-                if batch_count >= env_int("AGENT_VM_BACKFILL_MAX_BATCHES", env_int("AGENT_SENTRY_BACKFILL_MAX_BATCHES", 200)):
-                    log("backfill stopped at max batch limit")
+                if batch_count >= max_batches:
+                    if backfill_since:
+                        log("backfill stopped at max batch limit")
+                    else:
+                        log("live catch-up paused at max batch limit")
                     break
         except Exception as exc:
             log(f"bridge batch failed: {exc}")

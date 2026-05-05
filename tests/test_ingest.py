@@ -1,8 +1,10 @@
 import sqlite3
 from pathlib import Path
+from types import SimpleNamespace
 
+from agent_vm_observability import ingest
 from agent_vm_observability.ingest import claude_record_to_traces, codex_log_to_trace, parse_codex_kv, pi_event_to_trace
-from agent_vm_observability.model import GitMetadataCache
+from agent_vm_observability.model import GitMetadataCache, NormalizedTrace
 
 
 def test_parse_codex_kv_handles_quoted_values() -> None:
@@ -11,6 +13,68 @@ def test_parse_codex_kv_handles_quoted_values() -> None:
     assert parsed["model"] == "gpt-5.4"
     assert parsed["success"] == "true"
     assert parsed["duration_ms"] == "42"
+
+
+class FakeSink:
+    def __init__(self) -> None:
+        self.flushes = 0
+
+    def configure(self) -> bool:
+        return True
+
+    def flush(self, timeout: int = 30) -> None:
+        self.flushes += 1
+
+    def capture_exception(self, exc: BaseException) -> None:
+        raise exc
+
+
+def test_run_bridge_loop_drains_live_backlog(monkeypatch) -> None:
+    calls = []
+
+    class FakeIngestor:
+        def __init__(self, config, sink, memory) -> None:
+            pass
+
+        def initialize_state(self, state, backfill_since=None) -> None:
+            state["initialized_at"] = 1
+
+        def process_once(self, state, max_batch, since=None):
+            calls.append((max_batch, since))
+            if len(calls) <= 3:
+                return {"codex_logs": 1, "codex_threads": 0, "claude_records": 0, "pi_records": 0}
+            return {"codex_logs": 0, "codex_threads": 0, "claude_records": 0, "pi_records": 0}
+
+    monkeypatch.setenv("AGENT_VM_LIVE_MAX_BATCHES", "10")
+    monkeypatch.setattr(ingest, "AgentIngestor", FakeIngestor)
+
+    sink = FakeSink()
+    config = SimpleNamespace(max_batch=250, poll_seconds=15, sentry_dsn="dsn", record_memory=False)
+    result = ingest.run_bridge_loop(config, sink, None, {}, lambda state: None, loop=False, once=True)
+
+    assert result == 0
+    assert len(calls) == 4
+    assert sink.flushes == 4
+
+
+def test_sentry_capture_filter_drops_codex_stream_deltas() -> None:
+    assert not ingest._should_capture_sentry(
+        NormalizedTrace(
+            agent="codex",
+            kind="codex.websocket_event",
+            measurements={"estimated_bytes": 120},
+        )
+    )
+    assert ingest._should_capture_sentry(
+        NormalizedTrace(
+            agent="codex",
+            kind="codex.sse_event",
+            token_usage={"total_tokens": 42},
+        )
+    )
+    assert ingest._should_capture_sentry(
+        NormalizedTrace(agent="codex", kind="codex.websocket_event", tool_name="exec_command")
+    )
 
 
 def test_codex_log_to_trace_normalizes_fields(tmp_path: Path) -> None:
