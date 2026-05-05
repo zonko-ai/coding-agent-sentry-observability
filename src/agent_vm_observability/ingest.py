@@ -893,6 +893,7 @@ def run_bridge_loop(
                 total = sum(counts.values())
                 if total:
                     log(f"exported usage batch: {counts}")
+                    sink.flush(timeout=30)
                 batch_count += 1
                 if not backfill_since or total == 0:
                     break
