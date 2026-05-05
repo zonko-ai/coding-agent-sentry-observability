@@ -19,7 +19,7 @@ class CapturedTrace:
     measurements: dict[str, int | float]
 
 
-USAGE_SCHEMA = "llm_usage_v8"
+USAGE_SCHEMA = "llm_usage_v9"
 USAGE_MEASUREMENT_KEYS = ("input_tokens", "output_tokens", "total_tokens", "cost_usd")
 
 
