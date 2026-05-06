@@ -20,6 +20,7 @@ from .memory import MemoryStore, USAGE_SUM_KEYS, _json_object, _usage_identity, 
 from .model import NormalizedTrace
 from .redaction import short_hash
 from .sentry_dashboards import SentryDashboardClient
+from .sentry_sessions import export_sentry_session_rollups
 from .sentry_sink import SentrySink, USAGE_SCHEMA
 from .state import StateStore, empty_state
 from .timeutil import parse_timestamp, utc_now
@@ -221,7 +222,14 @@ def cmd_backfill(config: Any, minutes: int, dry_run: bool, update_state: bool) -
     result = run_bridge_loop(config, sink, memory_store, state, save, loop=False, once=True, backfill_minutes=minutes)
     if result != 0:
         return result
-    return export_sentry_usage_rollups(config, memory_store, minutes, dry_run=dry_run)
+    result = export_sentry_usage_rollups(config, memory_store, minutes, dry_run=dry_run)
+    if result != 0:
+        return result
+    session_count = export_sentry_session_rollups(config, memory_store, minutes, dry_run=dry_run, state=state if update_state else None)
+    if update_state:
+        save(state)
+    log(f"exported Sentry session rows: sessions={session_count}")
+    return 0
 
 
 def export_sentry_usage_rollups(config: Any, memory_store: MemoryStore, minutes: int, dry_run: bool = False) -> int:

@@ -172,7 +172,10 @@ create table if not exists memory_sources (
 
 create index if not exists idx_events_agent_time on events(agent_id, timestamp_epoch desc);
 create index if not exists idx_events_project_time on events(project, timestamp_epoch desc);
+create index if not exists idx_events_session_time on events(session_db_id, timestamp_epoch desc, id desc);
+create index if not exists idx_tool_calls_session on tool_calls(session_db_id);
 create index if not exists idx_sessions_project on agent_sessions(project);
+create index if not exists idx_sessions_last_seen on agent_sessions(last_seen_at_epoch);
 create index if not exists idx_observations_project on observations(project);
 create index if not exists idx_summaries_project on session_summaries(project);
 create index if not exists idx_memories_project on memories(project, status);

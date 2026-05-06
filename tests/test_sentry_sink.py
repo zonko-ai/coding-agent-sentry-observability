@@ -44,6 +44,15 @@ def test_tool_traces_do_not_get_llm_model_attributes() -> None:
     assert attrs["gen_ai.operation.name"] == "execute_tool"
 
 
+def test_session_traces_use_agent_session_op() -> None:
+    trace = NormalizedTrace(agent="codex", kind="session_v9", tags={"usage_rollup": "session"})
+
+    attrs = _gen_ai_attributes(trace, {})
+
+    assert _transaction_op(trace) == "gen_ai.agent.session"
+    assert attrs["gen_ai.operation.name"] == "agent_session"
+
+
 def test_cost_or_token_traces_with_model_use_ai_invocation_op() -> None:
     trace = NormalizedTrace(agent="pi", kind="suggestion.generated", model="gpt-5.5", measurements={"cost_usd": 0.01})
 
@@ -115,6 +124,40 @@ def test_live_usage_traces_are_marked_as_canonical_events(tmp_path) -> None:
     assert sink.captured[0].tags["usage_schema"] == USAGE_SCHEMA
     assert sink.captured[0].tags["usage_canonical"] == "true"
     assert sink.captured[0].tags["usage_rollup"] == "event"
+
+
+def test_session_traces_are_tagged_with_usage_schema(tmp_path) -> None:
+    sink = SentrySink(
+        RuntimeConfig(
+            config_path=tmp_path / "config.env",
+            legacy_config_path=tmp_path / "legacy.env",
+            state_path=tmp_path / "state.json",
+            memory_db_path=tmp_path / "memory.db",
+            codex_logs_db=tmp_path / "logs.sqlite",
+            codex_state_db=tmp_path / "state.sqlite",
+            claude_projects_glob="",
+            claude_mem_db=tmp_path / "claude-mem.db",
+            pi_suggester_glob="",
+            sentry_dsn="https://example.invalid/1",
+            sentry_org="example-org",
+            sentry_project="agent-vm-usage",
+            sentry_project_id="123",
+            include_text=False,
+            traces_sample_rate=1.0,
+            max_batch=250,
+            poll_seconds=15,
+            record_memory=True,
+        ),
+        dry_run=True,
+    )
+    trace = NormalizedTrace(agent="pi", kind="session_v9", session_id="session-1", model="gpt-5.5", tags={"usage_rollup": "session"})
+
+    sink.capture(trace)
+
+    assert sink.captured[0].tags["usage_schema"] == USAGE_SCHEMA
+    assert sink.captured[0].tags["usage_canonical"] == "true"
+    assert sink.captured[0].tags["usage_rollup"] == "session"
+    assert sink.captured[0].tags["usage_model"] == "gpt-5.5"
 
 
 def test_cost_or_token_traces_without_model_use_ai_invocation_op() -> None:

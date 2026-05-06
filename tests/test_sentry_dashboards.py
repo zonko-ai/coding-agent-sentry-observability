@@ -42,7 +42,7 @@ def test_dashboard_specs_define_one_chart_heavy_usage_dashboard() -> None:
 
     widget_titles = {widget["title"] for widget in widgets}
     assert {
-        "Agent Runs",
+        "Agent Sessions",
         "LLM Calls",
         "Span Duration",
         "LLM Calls by Model",
@@ -51,6 +51,8 @@ def test_dashboard_specs_define_one_chart_heavy_usage_dashboard() -> None:
         "LLM Calls by Agent",
         "Estimated Cost",
         "Cost by Agent",
+        "Sessions by Project",
+        "Session Ledger",
         "Failures",
     }.issubset(widget_titles)
 
@@ -63,9 +65,13 @@ def test_dashboard_payload_preserves_chart_layout_and_uses_seven_day_period() ->
     assert payload["period"] == "7d"
     assert payload["projects"] == [123]
     assert len(payload["widgets"]) >= 12
-    cost = next(widget for widget in payload["widgets"] if widget["title"] == "Estimated Cost")
-    assert cost["widgetType"] == "spans"
     event_query = f"is_transaction:true usage_schema:{USAGE_SCHEMA} usage_canonical:true usage_rollup:event span.op:gen_ai.invoke_agent"
+    session_query = f"is_transaction:true usage_schema:{USAGE_SCHEMA} usage_canonical:true usage_rollup:session span.op:gen_ai.agent.session"
+    active_sessions = next(widget for widget in payload["widgets"] if widget["title"] == "Active Sessions")
+    assert active_sessions["queries"][0]["conditions"] == f"{session_query} session_id:*"
+    agent_sessions = next(widget for widget in payload["widgets"] if widget["title"] == "Agent Sessions")
+    assert agent_sessions["queries"][0]["conditions"] == f"{session_query} session_id:*"
+    cost = next(widget for widget in payload["widgets"] if widget["title"] == "Estimated Cost")
     assert cost["queries"][0]["conditions"] == f"{event_query} gen_ai.cost.total_tokens:>0"
     assert cost["queries"][0]["aggregates"] == ["sum(gen_ai.cost.total_tokens)"]
     duration = next(widget for widget in payload["widgets"] if widget["title"] == "Span Duration")
@@ -83,8 +89,14 @@ def test_dashboard_payload_preserves_chart_layout_and_uses_seven_day_period() ->
     assert by_agent["limit"] == 10
     assert by_agent["queries"][0]["conditions"] == f"{event_query} agent:*"
     assert by_agent["queries"][0]["fields"] == ["count()", "agent"]
+    sessions_by_project = next(widget for widget in payload["widgets"] if widget["title"] == "Sessions by Project")
+    assert sessions_by_project["queries"][0]["conditions"] == f"{session_query} agent_project:*"
+    assert sessions_by_project["queries"][0]["fields"] == ["count_unique(session_id)", "agent_project"]
+    session_ledger = next(widget for widget in payload["widgets"] if widget["title"] == "Session Ledger")
+    assert session_ledger["queries"][0]["conditions"] == f"{session_query} session_id:*"
+    assert session_ledger["queries"][0]["fields"] == ["count()", "agent", "agent_project", "agent_model", "session_id"]
     high_cost = next(widget for widget in payload["widgets"] if widget["title"] == "High-cost Traces")
-    assert high_cost["layout"] == {"x": 0, "y": 20, "w": 6, "h": 4, "minH": 2}
+    assert high_cost["layout"] == {"x": 0, "y": 23, "w": 6, "h": 4, "minH": 2}
     assert high_cost["widgetType"] == "spans"
     assert high_cost["queries"][0]["conditions"] == f"{event_query} gen_ai.cost.total_tokens:>0"
     assert high_cost["queries"][0]["orderby"] == "-gen_ai.cost.total_tokens"

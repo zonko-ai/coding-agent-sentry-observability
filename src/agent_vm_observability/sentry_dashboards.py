@@ -12,6 +12,7 @@ from .sentry_sink import USAGE_SCHEMA
 
 
 _USAGE_QUERY = f"is_transaction:true usage_schema:{USAGE_SCHEMA} usage_canonical:true usage_rollup:event span.op:gen_ai.invoke_agent"
+_SESSION_QUERY = f"is_transaction:true usage_schema:{USAGE_SCHEMA} usage_canonical:true usage_rollup:session span.op:gen_ai.agent.session"
 
 
 def dashboard_specs() -> list[dict[str, Any]]:
@@ -20,7 +21,7 @@ def dashboard_specs() -> list[dict[str, Any]]:
             "title": "Agent VM Usage Overview",
             "period": "7d",
             "widgets": [
-                _big_number("Active Sessions", "count_unique(session_id)", f"{_USAGE_QUERY} session_id:*", layout=_layout(0, 0, 1, 2)),
+                _big_number("Active Sessions", "count_unique(session_id)", f"{_SESSION_QUERY} session_id:*", layout=_layout(0, 0, 1, 2)),
                 _big_number("LLM Call Count", "count()", _USAGE_QUERY, layout=_layout(1, 0, 1, 2)),
                 _big_number(
                     "Total Tokens",
@@ -35,9 +36,9 @@ def dashboard_specs() -> list[dict[str, Any]]:
                     layout=_layout(4, 0, 2, 2),
                 ),
                 _line(
-                    "Agent Runs",
+                    "Agent Sessions",
                     ["count_unique(session_id)"],
-                    f"{_USAGE_QUERY} session_id:*",
+                    f"{_SESSION_QUERY} session_id:*",
                     layout=_layout(0, 2, 3, 3),
                 ),
                 _line(
@@ -83,30 +84,42 @@ def dashboard_specs() -> list[dict[str, Any]]:
                     layout=_layout(3, 11, 3, 3),
                 ),
                 _table(
+                    "Sessions by Project",
+                    ["count_unique(session_id)", "agent_project"],
+                    f"{_SESSION_QUERY} agent_project:*",
+                    layout=_layout(0, 14, 6, 3),
+                ),
+                _table(
                     "Usage by Project",
                     ["count()", "sum(gen_ai.usage.total_tokens)", "sum(gen_ai.cost.total_tokens)", "agent_project"],
                     f"{_USAGE_QUERY} gen_ai.cost.total_tokens:>0 agent_project:*",
-                    layout=_layout(0, 14, 6, 3),
+                    layout=_layout(0, 17, 6, 3),
                 ),
                 _line(
                     "Failures",
                     ["count()"],
                     "level:error OR success:false",
                     dataset="error-events",
-                    layout=_layout(0, 17, 6, 3),
+                    layout=_layout(0, 20, 6, 3),
                 ),
                 _table(
                     "High-cost Traces",
                     ["gen_ai.cost.total_tokens", "gen_ai.usage.total_tokens", "span.duration", "transaction", "agent", "agent_project", "usage_model", "timestamp"],
                     f"{_USAGE_QUERY} gen_ai.cost.total_tokens:>0",
-                    layout=_layout(0, 20, 6, 4),
+                    layout=_layout(0, 23, 6, 4),
+                ),
+                _table(
+                    "Session Ledger",
+                    ["count()", "agent", "agent_project", "agent_model", "session_id"],
+                    f"{_SESSION_QUERY} session_id:*",
+                    layout=_layout(0, 27, 6, 4),
                 ),
                 _table(
                     "Recent Failures",
                     ["timestamp", "transaction", "agent", "agent_project", "agent_model", "level"],
                     "level:error OR success:false",
                     dataset="error-events",
-                    layout=_layout(0, 24, 6, 4),
+                    layout=_layout(0, 31, 6, 4),
                 ),
             ],
         },

@@ -17,6 +17,7 @@ from .memory import MemoryStore
 from .model import GitMetadataCache, NormalizedTrace, infer_project
 from .pricing import apply_cost_estimate
 from .redaction import redact_text, scrub, short_hash
+from .sentry_sessions import capture_sentry_session_rows
 from .sentry_sink import SentrySink
 from .state import empty_state
 from .timeutil import parse_timestamp, to_timestamp, utc_now
@@ -925,6 +926,16 @@ def run_bridge_loop(
                 total = sum(counts.values())
                 if total:
                     log(f"exported usage batch: {counts}")
+                    if memory and config.record_memory and not sink.dry_run and not sink.local_only:
+                        session_count = capture_sentry_session_rows(
+                            sink,
+                            memory,
+                            minutes=env_int("AGENT_VM_SESSION_EXPORT_MINUTES", 10080),
+                            state=state,
+                        )
+                        if session_count:
+                            log(f"exported session rows: {session_count}")
+                            save_state(state)
                     sink.flush(timeout=30)
                 batch_count += 1
                 if total == 0:

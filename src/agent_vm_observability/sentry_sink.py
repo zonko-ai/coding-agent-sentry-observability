@@ -64,7 +64,7 @@ class SentrySink:
     def capture(self, trace: NormalizedTrace) -> None:
         tags = trace.sentry_tags()
         measurements = trace.all_measurements()
-        if _has_usage_measurements(measurements):
+        if _has_usage_measurements(measurements) or _is_session_trace(trace):
             tags["usage_schema"] = USAGE_SCHEMA
             tags["usage_canonical"] = "true"
             usage_rollup = trace.tags.get("usage_rollup")
@@ -142,9 +142,15 @@ def _has_usage_measurements(measurements: dict[str, int | float]) -> bool:
     return any(key in measurements for key in USAGE_MEASUREMENT_KEYS)
 
 
+def _is_session_trace(trace: NormalizedTrace) -> bool:
+    return trace.tags.get("usage_rollup") == "session" or trace.kind.startswith("session_v")
+
+
 def _transaction_op(trace: NormalizedTrace) -> str:
     if trace.tool_name:
         return "gen_ai.execute_tool"
+    if _is_session_trace(trace):
+        return "gen_ai.agent.session"
     measurements = trace.all_measurements()
     if _has_usage_measurements(measurements):
         return "gen_ai.invoke_agent"
@@ -159,6 +165,8 @@ def _gen_ai_attributes(trace: NormalizedTrace, measurements: dict[str, int | flo
     if trace.tool_name:
         data["gen_ai.tool.name"] = trace.tool_name
         data["gen_ai.operation.name"] = "execute_tool"
+    elif _is_session_trace(trace):
+        data["gen_ai.operation.name"] = "agent_session"
     elif has_usage:
         data["gen_ai.operation.name"] = "invoke_agent"
     else:

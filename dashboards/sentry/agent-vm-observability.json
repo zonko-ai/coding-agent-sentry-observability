@@ -2,13 +2,14 @@
   "dashboards": [
     {
       "title": "Agent VM Usage Overview",
-      "purpose": "Single chart-heavy dashboard for agent runs, LLM calls, duration, tokens, tool usage, coding harness distribution, costs, projects, and failures across Codex, Claude Code, and Pi.",
-      "period": "1h",
+      "purpose": "Single chart-heavy dashboard for agent sessions, LLM calls, duration, tokens, tool usage, coding harness distribution, costs, projects, and failures across Codex, Claude Code, and Pi.",
+      "period": "7d",
       "queries": [
+        "is_transaction:true usage_schema:llm_usage_v9 usage_canonical:true usage_rollup:session span.op:gen_ai.agent.session",
+        "is_transaction:true usage_schema:llm_usage_v9 usage_canonical:true usage_rollup:event span.op:gen_ai.invoke_agent",
         "is_transaction:true agent_model:*",
         "is_transaction:true tool_name:*",
-        "is_transaction:true session_id:*",
-        "is_transaction:true (success:false OR level:error)",
+        "level:error OR success:false",
         "agent:codex OR agent:claude-code OR agent:pi"
       ]
     }

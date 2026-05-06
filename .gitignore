@@ -16,3 +16,5 @@ build/
 *.db-shm
 *.db-wal
 local/
+twitter_style_research.md
+twitter_article_agent_observability.md
