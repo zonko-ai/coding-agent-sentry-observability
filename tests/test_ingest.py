@@ -57,7 +57,7 @@ def test_run_bridge_loop_drains_live_backlog(monkeypatch) -> None:
     assert sink.flushes == 4
 
 
-def test_sentry_capture_filter_drops_codex_stream_deltas() -> None:
+def test_sentry_capture_filter_keeps_dashboard_relevant_events() -> None:
     assert not ingest._should_capture_sentry(
         NormalizedTrace(
             agent="codex",
@@ -65,12 +65,16 @@ def test_sentry_capture_filter_drops_codex_stream_deltas() -> None:
             measurements={"estimated_bytes": 120},
         )
     )
+    assert not ingest._should_capture_sentry(NormalizedTrace(agent="pi", kind="suggestion.provider.payload"))
     assert ingest._should_capture_sentry(
         NormalizedTrace(
             agent="codex",
             kind="codex.sse_event",
             token_usage={"total_tokens": 42},
         )
+    )
+    assert ingest._should_capture_sentry(
+        NormalizedTrace(agent="pi", kind="reseed.failed", measurements={"cost_usd": 0.01})
     )
     assert ingest._should_capture_sentry(
         NormalizedTrace(agent="codex", kind="codex.websocket_event", tool_name="exec_command")

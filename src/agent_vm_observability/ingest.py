@@ -60,9 +60,7 @@ def _should_capture_sentry(trace: NormalizedTrace) -> bool:
         return True
     if trace.level.lower() in {"critical", "error", "fatal"}:
         return True
-    if trace.agent == "codex" and trace.kind in CODEX_STREAM_KINDS:
-        return False
-    return True
+    return False
 
 
 def sqlite_connect(path: Path) -> sqlite3.Connection | None:
