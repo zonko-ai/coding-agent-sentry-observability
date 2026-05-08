@@ -65,15 +65,15 @@ def test_dashboard_payload_preserves_chart_layout_and_uses_seven_day_period() ->
     assert payload["period"] == "7d"
     assert payload["projects"] == [123]
     assert len(payload["widgets"]) >= 12
-    event_query = f"is_transaction:true usage_schema:{USAGE_SCHEMA} usage_canonical:true usage_rollup:event span.op:gen_ai.invoke_agent"
-    session_query = f"is_transaction:true usage_schema:{USAGE_SCHEMA} usage_canonical:true usage_rollup:session span.op:gen_ai.agent.session"
+    event_query = f"is_transaction:true usage_schema:{USAGE_SCHEMA} usage_canonical:true usage_rollup:event span.op:gen_ai.responses"
+    session_query = f"is_transaction:true usage_schema:{USAGE_SCHEMA} usage_canonical:true usage_rollup:session span.op:gen_ai.invoke_agent"
     active_sessions = next(widget for widget in payload["widgets"] if widget["title"] == "Active Sessions")
     assert active_sessions["queries"][0]["conditions"] == f"{session_query} session_id:*"
     agent_sessions = next(widget for widget in payload["widgets"] if widget["title"] == "Agent Sessions")
     assert agent_sessions["queries"][0]["conditions"] == f"{session_query} session_id:*"
     cost = next(widget for widget in payload["widgets"] if widget["title"] == "Estimated Cost")
-    assert cost["queries"][0]["conditions"] == f"{event_query} gen_ai.cost.total_tokens:>0"
-    assert cost["queries"][0]["aggregates"] == ["sum(gen_ai.cost.total_tokens)"]
+    assert cost["queries"][0]["conditions"] == f"{event_query} gen_ai.usage.total_cost:>0"
+    assert cost["queries"][0]["aggregates"] == ["sum(gen_ai.usage.total_cost)"]
     duration = next(widget for widget in payload["widgets"] if widget["title"] == "Span Duration")
     assert duration["displayType"] == "line"
     assert duration["layout"] == {"x": 0, "y": 5, "w": 3, "h": 3, "minH": 2}
@@ -98,5 +98,5 @@ def test_dashboard_payload_preserves_chart_layout_and_uses_seven_day_period() ->
     high_cost = next(widget for widget in payload["widgets"] if widget["title"] == "High-cost Traces")
     assert high_cost["layout"] == {"x": 0, "y": 23, "w": 6, "h": 4, "minH": 2}
     assert high_cost["widgetType"] == "spans"
-    assert high_cost["queries"][0]["conditions"] == f"{event_query} gen_ai.cost.total_tokens:>0"
-    assert high_cost["queries"][0]["orderby"] == "-gen_ai.cost.total_tokens"
+    assert high_cost["queries"][0]["conditions"] == f"{event_query} gen_ai.usage.total_cost:>0"
+    assert high_cost["queries"][0]["orderby"] == "-gen_ai.usage.total_cost"

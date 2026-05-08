@@ -11,8 +11,8 @@ from .config import RuntimeConfig
 from .sentry_sink import USAGE_SCHEMA
 
 
-_USAGE_QUERY = f"is_transaction:true usage_schema:{USAGE_SCHEMA} usage_canonical:true usage_rollup:event span.op:gen_ai.invoke_agent"
-_SESSION_QUERY = f"is_transaction:true usage_schema:{USAGE_SCHEMA} usage_canonical:true usage_rollup:session span.op:gen_ai.agent.session"
+_USAGE_QUERY = f"is_transaction:true usage_schema:{USAGE_SCHEMA} usage_canonical:true usage_rollup:event span.op:gen_ai.responses"
+_SESSION_QUERY = f"is_transaction:true usage_schema:{USAGE_SCHEMA} usage_canonical:true usage_rollup:session span.op:gen_ai.invoke_agent"
 
 
 def dashboard_specs() -> list[dict[str, Any]]:
@@ -31,8 +31,8 @@ def dashboard_specs() -> list[dict[str, Any]]:
                 ),
                 _big_number(
                     "Estimated Cost",
-                    "sum(gen_ai.cost.total_tokens)",
-                    f"{_USAGE_QUERY} gen_ai.cost.total_tokens:>0",
+                    "sum(gen_ai.usage.total_cost)",
+                    f"{_USAGE_QUERY} gen_ai.usage.total_cost:>0",
                     layout=_layout(4, 0, 2, 2),
                 ),
                 _line(
@@ -73,8 +73,8 @@ def dashboard_specs() -> list[dict[str, Any]]:
                 ),
                 _line(
                     "Cost by Agent",
-                    ["sum(gen_ai.cost.total_tokens)", "agent"],
-                    f"{_USAGE_QUERY} gen_ai.cost.total_tokens:>0",
+                    ["sum(gen_ai.usage.total_cost)", "agent"],
+                    f"{_USAGE_QUERY} gen_ai.usage.total_cost:>0",
                     layout=_layout(0, 11, 3, 3),
                 ),
                 _bar(
@@ -91,8 +91,8 @@ def dashboard_specs() -> list[dict[str, Any]]:
                 ),
                 _table(
                     "Usage by Project",
-                    ["count()", "sum(gen_ai.usage.total_tokens)", "sum(gen_ai.cost.total_tokens)", "agent_project"],
-                    f"{_USAGE_QUERY} gen_ai.cost.total_tokens:>0 agent_project:*",
+                    ["count()", "sum(gen_ai.usage.total_tokens)", "sum(gen_ai.usage.total_cost)", "agent_project"],
+                    f"{_USAGE_QUERY} gen_ai.usage.total_cost:>0 agent_project:*",
                     layout=_layout(0, 17, 6, 3),
                 ),
                 _line(
@@ -104,8 +104,8 @@ def dashboard_specs() -> list[dict[str, Any]]:
                 ),
                 _table(
                     "High-cost Traces",
-                    ["gen_ai.cost.total_tokens", "gen_ai.usage.total_tokens", "span.duration", "transaction", "agent", "agent_project", "usage_model", "timestamp"],
-                    f"{_USAGE_QUERY} gen_ai.cost.total_tokens:>0",
+                    ["gen_ai.usage.total_cost", "gen_ai.usage.total_tokens", "span.duration", "transaction", "agent", "agent_project", "usage_model", "timestamp"],
+                    f"{_USAGE_QUERY} gen_ai.usage.total_cost:>0",
                     layout=_layout(0, 23, 6, 4),
                 ),
                 _table(
@@ -189,6 +189,8 @@ def _query_fields(fields: list[str]) -> dict[str, list[str]]:
 def _default_orderby(query_fields: dict[str, list[str]]) -> str:
     if query_fields["aggregates"]:
         return f"-{query_fields['aggregates'][0]}"
+    if "gen_ai.usage.total_cost" in query_fields["columns"]:
+        return "-gen_ai.usage.total_cost"
     if "gen_ai.cost.total_tokens" in query_fields["columns"]:
         return "-gen_ai.cost.total_tokens"
     if "gen_ai.usage.cost_usd" in query_fields["columns"]:

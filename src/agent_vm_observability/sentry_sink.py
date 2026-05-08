@@ -21,6 +21,8 @@ class CapturedTrace:
 
 USAGE_SCHEMA = "llm_usage_v9"
 USAGE_MEASUREMENT_KEYS = ("input_tokens", "output_tokens", "total_tokens", "cost_usd")
+USAGE_SPAN_OP = "gen_ai.responses"
+AGENT_RUN_SPAN_OP = "gen_ai.invoke_agent"
 
 
 class SentrySink:
@@ -150,10 +152,10 @@ def _transaction_op(trace: NormalizedTrace) -> str:
     if trace.tool_name:
         return "gen_ai.execute_tool"
     if _is_session_trace(trace):
-        return "gen_ai.agent.session"
+        return AGENT_RUN_SPAN_OP
     measurements = trace.all_measurements()
     if _has_usage_measurements(measurements):
-        return "gen_ai.invoke_agent"
+        return USAGE_SPAN_OP
     return f"agent.{trace.agent}.{trace.kind}"
 
 
@@ -161,14 +163,16 @@ def _gen_ai_attributes(trace: NormalizedTrace, measurements: dict[str, int | flo
     data: dict[str, Any] = {"gen_ai.agent.name": trace.agent}
     if trace.provider:
         data["gen_ai.system"] = trace.provider
+    if trace.model:
+        data["gen_ai.request.model"] = trace.model
     has_usage = _has_usage_measurements(measurements)
     if trace.tool_name:
         data["gen_ai.tool.name"] = trace.tool_name
         data["gen_ai.operation.name"] = "execute_tool"
     elif _is_session_trace(trace):
-        data["gen_ai.operation.name"] = "agent_session"
-    elif has_usage:
         data["gen_ai.operation.name"] = "invoke_agent"
+    elif has_usage:
+        data["gen_ai.operation.name"] = "responses"
     else:
         data["gen_ai.operation.name"] = trace.kind
 
@@ -212,4 +216,5 @@ def _gen_ai_attributes(trace: NormalizedTrace, measurements: dict[str, int | flo
     cost_usd = float(measurements.get("cost_usd") or 0)
     if cost_usd:
         data["gen_ai.cost.total_tokens"] = cost_usd
+        data["gen_ai.usage.total_cost"] = cost_usd
     return data

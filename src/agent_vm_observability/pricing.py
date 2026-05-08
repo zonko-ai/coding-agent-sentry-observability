@@ -55,6 +55,16 @@ def _builtin_rules() -> list[PricingRule]:
     anthropic_note = "Anthropic standard API pricing, including cache read, 5m cache write, and 1h cache write rates."
     return [
         PricingRule(
+            name="gpt-5.5",
+            pattern=r"^gpt-5\.5$",
+            provider="openai",
+            input_per_mtok_usd=5.00,
+            cached_input_per_mtok_usd=0.50,
+            output_per_mtok_usd=30.00,
+            source="builtin-openai-2026-05-07",
+            note="OpenAI standard API pricing.",
+        ),
+        PricingRule(
             name="gpt-5.4",
             pattern=r"^gpt-5\.4$",
             provider="openai",
